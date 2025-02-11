@@ -288,6 +288,7 @@ renderCUDA(
 	const float* __restrict__ depths,
 	float* __restrict__ invdepth,
 	const int number_of_gaussians_per_sample,
+	int* __restrict__ id_values,
 	float* __restrict__ alpha_values,
 	float* __restrict__ depth_values,
 	float* __restrict__ color_values)
@@ -380,6 +381,7 @@ renderCUDA(
 				const uint32_t contribution_index = pix_id * number_of_gaussians_per_sample + collected_contributions_count;
 
 				// Collect alpha and depth values.
+				id_values[contribution_index] = collected_id[j];
 				alpha_values[contribution_index] = alpha;
 				depth_values[contribution_index] = collected_depth[j];
 
@@ -447,6 +449,7 @@ void FORWARD::render(
 	float* depths,
 	float* depth,
 	const int number_of_gaussians_per_sample,
+	int* id_values,
 	float* alpha_values,
 	float* depth_values,
 	float* color_values)
@@ -466,6 +469,7 @@ void FORWARD::render(
 		depths, 
 		depth,
 		number_of_gaussians_per_sample,
+		id_values,
 		alpha_values,
 		depth_values,
 		color_values);

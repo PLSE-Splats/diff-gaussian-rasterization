@@ -328,6 +328,7 @@ int CudaRasterizer::Rasterizer::forward(
 	constexpr int NUM_GAUSSIANS_PER_SAMPLE = 500;
 
 	// CPU side buffers for splat collection.
+	auto id_values = static_cast<int *>(calloc(number_of_samples * NUM_GAUSSIANS_PER_SAMPLE, sizeof(int)));
 	auto alpha_values = static_cast<float *>(calloc(number_of_samples * NUM_GAUSSIANS_PER_SAMPLE, sizeof(float)));
 	auto depth_values = static_cast<float *>(calloc(number_of_samples * NUM_GAUSSIANS_PER_SAMPLE, sizeof(float)));
 	auto color_values = static_cast<float *>(calloc(number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * 3, sizeof(float)));
@@ -335,15 +336,19 @@ int CudaRasterizer::Rasterizer::forward(
 	auto rendered_color = static_cast<float *>(calloc(number_of_samples * 3, sizeof(float)));
 
 	// Transfer to GPU.
+	int *device_id_values;
 	float *device_alpha_values, *device_depth_values, *device_color_values;
 
 	// Allocate device memory for splat collection.
+	CHECK_CUDA(cudaMalloc(&device_id_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * sizeof(int)), debug);
 	CHECK_CUDA(cudaMalloc(&device_alpha_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * sizeof(float)), debug);
 	CHECK_CUDA(cudaMalloc(&device_depth_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * sizeof(float)), debug);
 	CHECK_CUDA(cudaMalloc(&device_color_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * 3 * sizeof(float)),
 	           debug);
 
 	// Transfer buffers to GPU.
+	CHECK_CUDA(cudaMemcpy(device_id_values, id_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * sizeof(int),
+		           cudaMemcpyHostToDevice), debug);
 	CHECK_CUDA(
 		cudaMemcpy(device_alpha_values, alpha_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * sizeof(float),
 			cudaMemcpyHostToDevice), debug);
@@ -370,11 +375,14 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.depths,
 		depth,
 		NUM_GAUSSIANS_PER_SAMPLE,
+		device_id_values,
 		device_alpha_values,
 		device_depth_values,
 		device_color_values), debug);
 
 	// Transfer buffers back to CPU.
+	CHECK_CUDA(cudaMemcpy(id_values, device_id_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * sizeof(int),
+		           cudaMemcpyDeviceToHost), debug);
 	CHECK_CUDA(
 		cudaMemcpy(alpha_values, device_alpha_values, number_of_samples * NUM_GAUSSIANS_PER_SAMPLE * sizeof(float),
 			cudaMemcpyDeviceToHost), debug);
@@ -398,9 +406,9 @@ int CudaRasterizer::Rasterizer::forward(
 	// Write header.
 	output_file << "sample_index,out_color_r,out_color_g,out_color_b,background_r,background_g,background_b,";
 	for (int gaussian_index = 0; gaussian_index < NUM_GAUSSIANS_PER_SAMPLE; ++gaussian_index) {
-		output_file << "gaussian_" << gaussian_index << "_alpha,gaussian_" << gaussian_index << "_depth,gaussian_" <<
-				gaussian_index << "_color_r,gaussian_" << gaussian_index << "_color_g,gaussian_" << gaussian_index <<
-				"_color_b";
+		output_file << "gaussian_" << gaussian_index << "_id,gaussian_" << gaussian_index << "_alpha,gaussian_" <<
+				gaussian_index << "_depth,gaussian_" << gaussian_index << "_color_r,gaussian_" << gaussian_index <<
+				"_color_g,gaussian_" << gaussian_index << "_color_b";
 		if (gaussian_index < NUM_GAUSSIANS_PER_SAMPLE - 1) {
 			output_file << ',';
 		}
@@ -419,11 +427,12 @@ int CudaRasterizer::Rasterizer::forward(
 
 		// Write Gaussian data.
 		for (int gaussian_index = 0; gaussian_index < NUM_GAUSSIANS_PER_SAMPLE; ++gaussian_index) {
-			output_file << alpha_values[sample_index * NUM_GAUSSIANS_PER_SAMPLE + gaussian_index] << ',' <<
-					depth_values[sample_index * NUM_GAUSSIANS_PER_SAMPLE + gaussian_index] << ',' <<
-					color_values[sample_index * NUM_GAUSSIANS_PER_SAMPLE * 3 + gaussian_index * 3] << ',' <<
-					color_values[sample_index * NUM_GAUSSIANS_PER_SAMPLE * 3 + gaussian_index * 3 + 1] << ',' <<
-					color_values[sample_index * NUM_GAUSSIANS_PER_SAMPLE * 3 + gaussian_index * 3 + 2];
+			output_file << id_values[sample_index * NUM_GAUSSIANS_PER_SAMPLE + gaussian_index] << ',' << alpha_values[
+				sample_index * NUM_GAUSSIANS_PER_SAMPLE + gaussian_index] << ',' << depth_values[
+				sample_index * NUM_GAUSSIANS_PER_SAMPLE + gaussian_index] << ',' << color_values[
+				sample_index * NUM_GAUSSIANS_PER_SAMPLE * 3 + gaussian_index * 3] << ',' << color_values[
+				sample_index * NUM_GAUSSIANS_PER_SAMPLE * 3 + gaussian_index * 3 + 1] << ',' << color_values[
+				sample_index * NUM_GAUSSIANS_PER_SAMPLE * 3 + gaussian_index * 3 + 2];
 
 			if (gaussian_index < NUM_GAUSSIANS_PER_SAMPLE - 1) {
 				output_file << ',';
@@ -433,6 +442,8 @@ int CudaRasterizer::Rasterizer::forward(
 		if (sample_index < number_of_samples - 1) {
 			output_file << '\n';
 		}
+
+		std::cout << sample_index << " / " << number_of_samples << "\n" << std::endl;
 	}
 	output_file << std::endl;
 
