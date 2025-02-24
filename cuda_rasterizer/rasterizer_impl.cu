@@ -443,7 +443,9 @@ int CudaRasterizer::Rasterizer::forward(
 			output_file << '\n';
 		}
 
-		std::cout << sample_index << " / " << number_of_samples << "\n" << std::endl;
+		// Print progress every 1000 samples.
+		if (sample_index % 1000 == 0)
+            std::cout << sample_index << " / " << number_of_samples << "\n" << std::endl;
 	}
 	output_file << std::endl;
 
