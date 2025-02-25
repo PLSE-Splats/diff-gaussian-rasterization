@@ -277,6 +277,7 @@ renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint64_t* __restrict__ point_list_key,
 	const uint32_t* __restrict__ point_list,
+	const uint32_t* __restrict__ global_splat_id_list,
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
@@ -391,8 +392,6 @@ renderCUDA(
 				done = true;
 				continue;
 			}
-
-			// TODO: Implement SKM here.
 
 			// Collect data for clustering.
             const float splat_alpha = alpha;
@@ -551,6 +550,7 @@ void FORWARD::render(
 	const uint2* ranges,
 	const uint64_t* point_list_key,
 	const uint32_t* point_list,
+	const uint32_t* global_splat_id_list,
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
@@ -566,6 +566,7 @@ void FORWARD::render(
 		ranges,
 		point_list_key,
 		point_list,
+		global_splat_id_list,
 		W, H,
 		means2D,
 		colors,

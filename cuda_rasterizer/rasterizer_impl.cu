@@ -15,6 +15,9 @@
 #include <algorithm>
 #include <numeric>
 #include <cuda.h>
+#include <set>
+#include <vector>
+#include <random>
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <cub/cub.cuh>
@@ -320,6 +323,27 @@ int CudaRasterizer::Rasterizer::forward(
 			imgState.ranges);
 	CHECK_CUDA(, debug)
 
+	// Generate global splat order.
+
+	// Copy the ID list back to host.
+	const auto host_point_list = new uint32_t[num_rendered];
+	CHECK_CUDA(cudaMemcpy(host_point_list, binningState.point_list, num_rendered * sizeof(uint32_t), cudaMemcpyDeviceToHost), debug);
+
+	// Convert into set to get unique IDs.
+	std::set<uint32_t> unique_ids(host_point_list, host_point_list + num_rendered);
+
+	// Convert to a vector and shuffle.
+	std::vector<uint32_t> unique_ids_shuffle(unique_ids_shuffle.begin(), unique_ids_shuffle.end());
+	std::random_device rd;
+	std::mt19937 g(rd());
+	std::shuffle(unique_ids_shuffle.begin(), unique_ids_shuffle.end(), g);
+
+	// Create splat order list for GPU and transfer.
+	uint32_t* global_splat_id_order;
+	CHECK_CUDA(cudaMalloc(&global_splat_id_order, unique_ids_shuffle.size() * sizeof(uint32_t)), debug);
+	CHECK_CUDA(cudaMemcpy(global_splat_id_order, unique_ids_shuffle.data(), unique_ids_shuffle.size() * sizeof(uint32_t), cudaMemcpyHostToDevice), debug);
+	
+
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	CHECK_CUDA(FORWARD::render(
@@ -327,6 +351,7 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.ranges,
 		binningState.point_list_keys,
 		binningState.point_list,
+		global_splat_id_order,
 		width, height,
 		geomState.means2D,
 		feature_ptr,

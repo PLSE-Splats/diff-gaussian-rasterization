@@ -69,6 +69,7 @@ namespace FORWARD
 		const uint2* ranges,
 		const uint64_t* point_list_key,
 		const uint32_t* point_list,
+		const uint32_t* global_splat_id_list,
 		int W, int H,
 		const float2* points_xy_image,
 		const float* features,
