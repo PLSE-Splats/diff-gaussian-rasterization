@@ -278,6 +278,7 @@ renderCUDA(
 	const uint64_t* __restrict__ point_list_key,
 	const uint32_t* __restrict__ point_list,
 	const uint32_t* __restrict__ global_splat_id_list,
+	const int splat_id_count,
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
@@ -307,6 +308,42 @@ renderCUDA(
 	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	int toDo = range.y - range.x;
+#define MAX_TODO 1024
+
+	if (pix_id == 0) {
+		// Get the order of the points in the global list.
+		int global_order_index[MAX_TODO];
+		for (int i = 0; i < toDo; ++i) {
+			for (int j = 0; j < splat_id_count; ++j) {
+				if (global_splat_id_list[j] == point_list[range.x + i]) {
+					global_order_index[i] = j;
+					break;
+				}
+			}
+		}
+
+		// Create a new list of points sorted by global order.
+		uint32_t sorted_point_list[MAX_TODO];
+		bool used[MAX_TODO] = { false };
+
+		// Find and place points in order.
+		for (int i = 0; i < toDo; ++i) {
+			// Find the unused point with lowest global order.
+			int min_global_index = splat_id_count;
+			int min_local_index = -1;
+
+			for (int j = 0; j < toDo; ++j) {
+				if (!used[j] && global_order_index[j] < min_global_index) {
+					min_global_index = global_order_index[j];
+					min_local_index = j;
+				}
+			}
+
+			// Place the point in the sorted list.
+			sorted_point_list[i] = point_list[range.x + min_local_index];
+			used[min_local_index] = true;
+		}
+	}
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
@@ -551,6 +588,7 @@ void FORWARD::render(
 	const uint64_t* point_list_key,
 	const uint32_t* point_list,
 	const uint32_t* global_splat_id_list,
+	const int splat_id_count,
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
@@ -567,6 +605,7 @@ void FORWARD::render(
 		point_list_key,
 		point_list,
 		global_splat_id_list,
+		splat_id_count,
 		W, H,
 		means2D,
 		colors,

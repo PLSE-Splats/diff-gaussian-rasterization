@@ -333,7 +333,7 @@ int CudaRasterizer::Rasterizer::forward(
 	std::set<uint32_t> unique_ids(host_point_list, host_point_list + num_rendered);
 
 	// Convert to a vector and shuffle.
-	std::vector<uint32_t> unique_ids_shuffle(unique_ids_shuffle.begin(), unique_ids_shuffle.end());
+	std::vector<uint32_t> unique_ids_shuffle(unique_ids.begin(), unique_ids.end());
 	std::random_device rd;
 	std::mt19937 g(rd());
 	std::shuffle(unique_ids_shuffle.begin(), unique_ids_shuffle.end(), g);
@@ -342,6 +342,9 @@ int CudaRasterizer::Rasterizer::forward(
 	uint32_t* global_splat_id_order;
 	CHECK_CUDA(cudaMalloc(&global_splat_id_order, unique_ids_shuffle.size() * sizeof(uint32_t)), debug);
 	CHECK_CUDA(cudaMemcpy(global_splat_id_order, unique_ids_shuffle.data(), unique_ids_shuffle.size() * sizeof(uint32_t), cudaMemcpyHostToDevice), debug);
+
+	// Free host memory.
+	delete[] host_point_list;
 	
 
 	// Let each tile blend its range of Gaussians independently in parallel
@@ -352,6 +355,7 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list_keys,
 		binningState.point_list,
 		global_splat_id_order,
+		num_rendered,
 		width, height,
 		geomState.means2D,
 		feature_ptr,
