@@ -329,7 +329,7 @@ renderCUDA(
 		block.sync();
 
 		// Reorder the point to match the global order.
-		if (pix_id == 0) {
+		if (block.thread_rank() == 0) {
 			for (int i = 0; i < toDo; ++i) {
 				printf("Splat index %d has global index %d\n", range.x + i, global_order_index[i]);
 			}
