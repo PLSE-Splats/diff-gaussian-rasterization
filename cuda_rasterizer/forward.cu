@@ -311,13 +311,9 @@ renderCUDA(
 	int toDo = range.y - range.x;
 
 #define MAX_TODO 10000
-	if (toDo > MAX_TODO) {
-		printf("Increase Max: %d\n", toDo);
-	}
 
 	// Define the list of ID's resorted to match the global order.
 	uint32_t sorted_point_list[MAX_TODO];
-
 
 	__shared__ int global_order_index[MAX_TODO];
 
@@ -337,25 +333,24 @@ renderCUDA(
 
 	// Reorder the point to match the global order.
     if (block.thread_rank() == 0) {
-        // Keep track of the indices used in the sorted list.
-        bool used[MAX_TODO] = {false};
+        // Keep track of the last lowest index from the global_order_index.
+    	int last_lowest_index = -1;
 
-        // Find and place points in order.
+        // Fill out sorted_post_list.
         for (int i = 0; i < toDo; ++i) {
-	        // Find the unused point with lowest global order.
-	        int min_global_index = splat_id_count;
-	        int min_local_index = -1;
-
+        	// Search global_order_index for the next lowest index after last_lowest_index.
+        	int next_lowest_index = INT_MAX;
 	        for (int j = 0; j < toDo; ++j) {
-		        if (!used[j] && global_order_index[j] < min_global_index) {
-			        min_global_index = global_order_index[j];
-			        min_local_index = j;
-		        }
+               if (global_order_index[j] < next_lowest_index && global_order_index[j] > last_lowest_index) {
+                   next_lowest_index = global_order_index[j];
+               }
 	        }
 
 	        // Place the point in the sorted list.
-	        sorted_point_list[i] = point_list[range.x + min_local_index];
-	        used[min_local_index] = true;
+	        sorted_point_list[i] = global_splat_id_list[next_lowest_index];
+
+        	// Update last_lowest_index.
+        	last_lowest_index = next_lowest_index;
         }
 	}
 
