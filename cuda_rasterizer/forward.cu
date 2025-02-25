@@ -309,55 +309,54 @@ renderCUDA(
 	uint2 range = ranges[group_index_id];
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	int toDo = range.y - range.x;
-#define MAX_TODO 2293
+
+#define MAX_TODO 10000
+	if (toDo > MAX_TODO) {
+		printf("Increase Max: %d\n", toDo);
+	}
+
+	// Define the list of ID's resorted to match the global order.
+	uint32_t sorted_point_list[MAX_TODO];
+
 
 	__shared__ int global_order_index[MAX_TODO];
 
-	if (group_index_id == 0) {
-		// Get the indices of the points in the global list.
-		for (int i = 0; i < rounds; ++i) {
-			int progress = i * BLOCK_SIZE + block.thread_rank();
-			if (range.x + progress < range.y) {
-				for (int j = 0; j < splat_id_count; ++j) {
-					if (global_splat_id_list[j] == point_list[range.x + progress]) {
-						global_order_index[progress] = j;
-						break;
-					}
+	// Get the indices of the points in the global list.
+	for (int i = 0; i < rounds; ++i) {
+		int progress = i * BLOCK_SIZE + block.thread_rank();
+		if (range.x + progress < range.y) {
+			for (int j = 0; j < splat_id_count; ++j) {
+				if (global_splat_id_list[j] == point_list[range.x + progress]) {
+					global_order_index[progress] = j;
+					break;
 				}
 			}
 		}
-		block.sync();
+	}
+	block.sync();
 
-		// Reorder the point to match the global order.
-		if (block.thread_rank() == 0) {
-			for (int i = 0; i < toDo; ++i) {
-				printf("Splat index %d has global index %d\n", range.x + i, global_order_index[i]);
-			}
-			// Create a new list of points sorted by global order.
-			uint32_t sorted_point_list[MAX_TODO];
-			bool used[MAX_TODO] = {false};
+	// Reorder the point to match the global order.
+    if (block.thread_rank() == 0) {
+        // Keep track of the indices used in the sorted list.
+        bool used[MAX_TODO] = {false};
 
-			// Find and place points in order.
-			for (int i = 0; i < toDo; ++i) {
-				// Find the unused point with lowest global order.
-				int min_global_index = splat_id_count;
-				int min_local_index = -1;
+        // Find and place points in order.
+        for (int i = 0; i < toDo; ++i) {
+	        // Find the unused point with lowest global order.
+	        int min_global_index = splat_id_count;
+	        int min_local_index = -1;
 
-				for (int j = 0; j < toDo; ++j) {
-					if (!used[j] && global_order_index[j] < min_global_index) {
-						min_global_index = global_order_index[j];
-						min_local_index = j;
-					}
-				}
+	        for (int j = 0; j < toDo; ++j) {
+		        if (!used[j] && global_order_index[j] < min_global_index) {
+			        min_global_index = global_order_index[j];
+			        min_local_index = j;
+		        }
+	        }
 
-				// Place the point in the sorted list.
-				sorted_point_list[i] = point_list[range.x + min_local_index];
-				used[min_local_index] = true;
-			}
-			for (int i = 0; i < toDo; ++i) {
-				printf("%d\n", sorted_point_list[i]);
-			}
-		}
+	        // Place the point in the sorted list.
+	        sorted_point_list[i] = point_list[range.x + min_local_index];
+	        used[min_local_index] = true;
+        }
 	}
 
 	// Allocate storage for batches of collectively fetched data.
@@ -403,7 +402,7 @@ renderCUDA(
 		int progress = i * BLOCK_SIZE + block.thread_rank();
 		if (range.x + progress < range.y)
 		{
-			int coll_id = point_list[range.x + progress];
+			int coll_id = sorted_point_list[progress];
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
