@@ -312,31 +312,27 @@ renderCUDA(
 
 #define MAX_TODO 10000
 
-	// Define the list of ID's resorted to match the global order.
-	uint32_t sorted_point_list[MAX_TODO];
-
-	__shared__ int global_order_index[MAX_TODO];
-
-	// Get the indices of the points in the global list.
-	for (int i = 0; i < rounds; ++i) {
-		int progress = i * BLOCK_SIZE + block.thread_rank();
-		if (range.x + progress < range.y) {
-			for (int j = 0; j < splat_id_count; ++j) {
-				if (global_splat_id_list[j] == point_list[range.x + progress]) {
-					global_order_index[progress] = j;
-					break;
-				}
-			}
-		}
-	}
-	block.sync();
+	// Define the list of ID's for this block resorted to match the global order.
+	__shared__ uint32_t sorted_point_list[MAX_TODO];
 
 	// Reorder the point to match the global order.
     if (block.thread_rank() == 0) {
-        // Keep track of the last lowest index from the global_order_index.
-    	int last_lowest_index = -1;
+	    int global_order_index[MAX_TODO];
 
-        // Fill out sorted_post_list.
+	    // Get the indices of the points in the global list.
+	    for (int i = 0; i < toDo; ++i) {
+		    for (int j = 0; j < splat_id_count; ++j) {
+			    if (global_splat_id_list[j] == point_list[range.x + i]) {
+				    global_order_index[i] = j;
+				    break;
+			    }
+		    }
+	    }
+
+	    // Keep track of the last lowest index from the global_order_index.
+	    int last_lowest_index = -1;
+
+	    // Fill out sorted_post_list.
         for (int i = 0; i < toDo; ++i) {
         	// Search global_order_index for the next lowest index after last_lowest_index.
         	int next_lowest_index = INT_MAX;
@@ -353,6 +349,7 @@ renderCUDA(
         	last_lowest_index = next_lowest_index;
         }
 	}
+	block.sync();
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
