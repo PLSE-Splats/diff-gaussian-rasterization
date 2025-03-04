@@ -315,6 +315,7 @@ renderCUDA(
 	// Define the list of ID's for this block resorted to match the global order.
 	__shared__ uint32_t sorted_point_list[MAX_TODO];
 	__shared__ int next_sorted_point_list_position;
+	__shared__ int current_global_id;
 
 	// Initialize the next_spl_position.
 	if (block.thread_rank() == 0) {
@@ -326,7 +327,10 @@ renderCUDA(
 	for (int global_index = 0; global_index < splat_id_count && next_sorted_point_list_position < toDo; ++
 	     global_index) {
 		// Get the current global id to check.
-		int current_global_id = global_splat_id_list[global_index];
+		if (block.thread_rank() == 0) {
+            current_global_id = global_splat_id_list[global_index];
+		}
+		block.sync();
 
 		// Check if the current_global_id is in the list of points to process.
 		for (int thread_index = block.thread_rank(); thread_index < toDo; thread_index += block.num_threads()) {
