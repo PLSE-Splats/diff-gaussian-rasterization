@@ -395,11 +395,7 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-
-			// Compute collected depth.
-			uint64_t collection_key = point_list_key[range.x + progress];
-			uint32_t depth_to_uint32 = static_cast<uint32_t>(collection_key & 0xFFFFFFFF);
-			collected_depth[block.thread_rank()] = *reinterpret_cast<float*>(&depth_to_uint32);
+			collected_depth[block.thread_rank()] = depths[coll_id];
 		}
 		block.sync();
 
