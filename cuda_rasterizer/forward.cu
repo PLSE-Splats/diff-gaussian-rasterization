@@ -314,42 +314,35 @@ renderCUDA(
 
 	// Define the list of ID's for this block resorted to match the global order.
 	__shared__ uint32_t sorted_point_list[MAX_TODO];
+	__shared__ int next_sorted_point_list_position;
 
-	// Reorder the point to match the global order.
-    if (block.thread_rank() == 0) {
-	    int global_order_index[MAX_TODO];
-
-	    // Get the indices of the points in the global list.
-	    for (int i = 0; i < toDo; ++i) {
-		    for (int j = 0; j < splat_id_count; ++j) {
-			    if (global_splat_id_list[j] == point_list[range.x + i]) {
-				    global_order_index[i] = j;
-				    break;
-			    }
-		    }
-	    }
-
-	    // Keep track of the last lowest index from the global_order_index.
-	    int last_lowest_index = -1;
-
-	    // Fill out sorted_post_list.
-        for (int i = 0; i < toDo; ++i) {
-        	// Search global_order_index for the next lowest index after last_lowest_index.
-        	int next_lowest_index = INT_MAX;
-	        for (int j = 0; j < toDo; ++j) {
-               if (global_order_index[j] < next_lowest_index && global_order_index[j] > last_lowest_index) {
-                   next_lowest_index = global_order_index[j];
-               }
-	        }
-
-	        // Place the point in the sorted list.
-	        sorted_point_list[i] = global_splat_id_list[next_lowest_index];
-
-        	// Update last_lowest_index.
-        	last_lowest_index = next_lowest_index;
-        }
+	// Initialize the next_spl_position.
+	if (block.thread_rank() == 0) {
+		next_sorted_point_list_position = 0;
 	}
 	block.sync();
+
+	// Check through the global_splat_id_list to find the next splat in this block.
+	for (int global_index = 0; global_index < splat_id_count && next_sorted_point_list_position < toDo; ++
+	     global_index) {
+		// Get the current global id to check.
+		int current_global_id = global_splat_id_list[global_index];
+
+		// Check if the current_global_id is in the list of points to process.
+		for (int thread_index = block.thread_rank(); thread_index < toDo; thread_index += block.num_threads()) {
+			// Get the current index to check.
+			uint32_t point_id = point_list[range.x + thread_index];
+
+			// If the point_id is the same as the current_global_id, add it to the sorted_point_list.
+			if (point_id == current_global_id) {
+				int sorted_point_list_position = atomicAdd(&next_sorted_point_list_position, 1);
+				sorted_point_list[sorted_point_list_position] = point_id;
+			}
+		}
+
+		// Sync threads to ensure that all threads have finished checking the current_global_id.
+		block.sync();
+	}
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
