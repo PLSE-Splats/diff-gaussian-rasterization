@@ -21,6 +21,7 @@
 #include <cub/device/device_radix_sort.cuh>
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include <nvtx3/nvToolsExt.h>
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -221,6 +222,10 @@ int CudaRasterizer::Rasterizer::forward(
 	int* radii,
 	bool debug)
 {
+	const auto forwardRange = nvtxRangeStartA("Forward");
+
+	const auto preprocessSetupRange = nvtxRangeStartA("Preprocess Setup");
+	
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
 
@@ -246,6 +251,10 @@ int CudaRasterizer::Rasterizer::forward(
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
 	}
 
+	nvtxRangeEnd(preprocessSetupRange);
+
+	const auto preprocessRange = nvtxRangeStartA("Preprocess");
+	
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -275,9 +284,17 @@ int CudaRasterizer::Rasterizer::forward(
 		antialiasing
 	), debug)
 
+	nvtxRangeEnd(preprocessRange);
+
+	const auto prefixSumRange = nvtxRangeStartA("Prefix Sum");
+	
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
 	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
+
+	nvtxRangeEnd(prefixSumRange);
+
+	const auto duplicateWithKeysSetupRange = nvtxRangeStartA("Duplicate With Keys Setup");
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
@@ -287,6 +304,10 @@ int CudaRasterizer::Rasterizer::forward(
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
 	BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
 
+	nvtxRangeEnd(duplicateWithKeysSetupRange);
+
+	const auto duplicateWithKeysRange = nvtxRangeStartA("Duplicate With Keys");
+	
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
 	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
@@ -300,7 +321,15 @@ int CudaRasterizer::Rasterizer::forward(
 		tile_grid)
 	CHECK_CUDA(, debug)
 
+	nvtxRangeEnd(duplicateWithKeysRange);
+
+	const auto sortSetupRange = nvtxRangeStartA("Sort Setup");
+
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
+
+	nvtxRangeEnd(sortSetupRange);
+
+	const auto sortRange = nvtxRangeStartA("Sort");
 
 	// Sort complete list of (duplicated) Gaussian indices by keys
 	CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
@@ -310,7 +339,15 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list_unsorted, binningState.point_list,
 		num_rendered, 0, 32 + bit), debug)
 
+	nvtxRangeEnd(sortRange);
+
+	const auto identifyTileRangesSetupRange = nvtxRangeStartA("Identify Tile Ranges Setup");
+	
 	CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
+
+	nvtxRangeEnd(identifyTileRangesSetupRange);
+
+	const auto identifyTileRangesRange = nvtxRangeStartA("Identify Tile Ranges");
 
 	// Identify start and end of per-tile workloads in sorted list
 	if (num_rendered > 0)
@@ -320,8 +357,14 @@ int CudaRasterizer::Rasterizer::forward(
 			imgState.ranges);
 	CHECK_CUDA(, debug)
 
+	nvtxRangeEnd(identifyTileRangesRange);
+
+	const auto renderSetupRange = nvtxRangeStartA("Render Setup");
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	nvtxRangeEnd(renderSetupRange);
+
+	const auto renderRange = nvtxRangeStartA("Render");
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		imgState.ranges,
@@ -337,6 +380,10 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.depths,
 		depth), debug)
 
+	nvtxRangeEnd(renderRange);
+
+	nvtxRangeEnd(forwardRange);
+	
 	return num_rendered;
 }
 
