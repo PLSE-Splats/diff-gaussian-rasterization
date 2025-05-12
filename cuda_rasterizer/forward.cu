@@ -335,18 +335,14 @@ skm_renderCUDA(
 
 	// Declare shared data structures.
 
-	// Which index to start fetching from.
+	// Which Gaussian index to start fetching from.
 	int fetch_base_index = 0;
-
-	// Temporary fetch storage.
-	__shared__ int fetched_index[BLOCK_SIZE];
-	__shared__ float2 fetched_xy[BLOCK_SIZE];
 
 	// BlockScan for compacting data.
 	using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
 	__shared__ BlockScan::TempStorage temp_storage;
 
-	// Actual storage for collected data.
+	// Storage for collected data.
 	__shared__ int collected_index[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
@@ -356,7 +352,7 @@ skm_renderCUDA(
 	int collection_write_base_index = 0;
 
 	if (is_profile_pixel)
-		printf("Post setup.");
+		printf("Post setup.\n");
 
 	// Continue fetching and clustering until all Gaussians have been processed.
 	while (fetch_base_index < P) {
@@ -371,31 +367,30 @@ skm_renderCUDA(
 
 		// Continue fetching until collection is full or all data is fetched.
 		while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < P) {
-			if (is_profile_pixel)
-				printf("collection_write_base_index and fetch_base_index: %d %d\n", collection_write_base_index,
-				       fetch_base_index);
+			// if (is_profile_pixel)
+			// 	printf("collection_write_base_index and fetch_base_index: %d %d\n", collection_write_base_index,
+			// 	       fetch_base_index);
 
-			// Reset fetched data.
-			fetched_index[thread_rank] = -1;
+			// Initialize fetching variables (we assume the fetched data is invalid).
+			bool valid = false;
+			float2 fetched_xy;
 
-			// Fetch the next BLOCK_SIZE amount of data.
+			// Get the Gaussian index to fetch.
 			const int target_gaussian_index = fetch_base_index + static_cast<int>(thread_rank);
 
-			// If this is a valid Gaussian, check if it intersects with the tile.
+			// If this is a valid Gaussian index, check if it intersects with the tile.
 			if (target_gaussian_index < P) {
 				// Only do the computation if the gaussian has a radius.
 				int gaussian_radius = radii[target_gaussian_index];
 				if (gaussian_radius > 0) {
-					const float2 xy = means_2d[target_gaussian_index];
+					// Compute tile bounds.
+					fetched_xy = means_2d[target_gaussian_index];
 					uint2 bounds_min, bounds_max;
-					getRect(xy, gaussian_radius, bounds_min, bounds_max, grid_size);
+					getRect(fetched_xy, gaussian_radius, bounds_min, bounds_max, grid_size);
 
-					// If the Gaussian intersects, copy the Gaussian data to shared fetched memory.
-					if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-					    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
-						fetched_index[thread_rank] = target_gaussian_index;
-						fetched_xy[thread_rank] = xy;
-					}
+					// If the Gaussian intersects the tile, mark it as valid.
+					valid = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+					        group_index.y >= bounds_min.y && group_index.y < bounds_max.y;
 				}
 			}
 
@@ -404,35 +399,39 @@ skm_renderCUDA(
 
 			// Compact the fetched data.
 
-			// Valid flag.
-			bool valid = fetched_index[thread_rank] != -1;
-
 			// Compute compacted index and offset into collections.
 			int compacted_index;
-			int valid_count;
+			int valid_count = 0;
 			BlockScan(temp_storage).ExclusiveSum(valid, compacted_index, valid_count);
 
 			// Sync compacting.
 			block.sync();
 
-			// If there was any valid data fetched, this thread had valid data, and the collection write index is valid, write it to the shared collection.
-			int collection_index = collection_write_base_index + compacted_index;
-			if (valid_count > 0 && valid_count < BLOCK_SIZE && valid && collection_index < BLOCK_SIZE) {
-				collected_index[collection_index] = target_gaussian_index;
-				collected_xy[collection_index] = fetched_xy[thread_rank];
-				collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
-				collected_depth[collection_index] = depths[target_gaussian_index];
+			if (is_profile_pixel)
+				printf("%d / %d; %d; %d\n", fetch_base_index, P, valid_count, collection_write_base_index);
+
+			// If there was any valid data...
+			if (valid_count > 0 && valid_count < BLOCK_SIZE) {
+				// Write valid data to collections if in bounds.
+				int collection_index = collection_write_base_index + compacted_index;
+				if (valid && collection_index < BLOCK_SIZE) {
+					collected_index[collection_index] = target_gaussian_index;
+					collected_xy[collection_index] = fetched_xy;
+					collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
+					collected_depth[collection_index] = depths[target_gaussian_index];
+				}
 
 				// Sync writing.
 				block.sync();
 
-				// Update write base index.
+				// Increment the collection write base index.
 				collection_write_base_index += valid_count;
 			}
 
+
 			// Update fetch base index.
 			if (collection_write_base_index < BLOCK_SIZE) {
-				// If there's still space, keep fetching.
+				// If there's still space in the collection, keep fetching.
 				fetch_base_index += BLOCK_SIZE;
 			} else {
 				// Otherwise, prepare fetch index to start after the last added index in the next round.
