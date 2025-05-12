@@ -76,9 +76,14 @@ namespace FORWARD
 	 * @param colors_precomp
 	 * @param rgb
 	 * @param depth
+	 * @param final_transmittance
+	 * @param n_contrib
+	 * @param out_color
+	 * @param bg_color
 	 */
 	void skm_render(int P, dim3 grid_size, dim3 block_size, int *radii, const float2 *means_2d, const float4 *conic_opacity, const float *
-	                depths, int width, int height, const float *colors_precomp, const float *rgb, float *depth);
+	                depths, int width, int height, const float *colors_precomp, const float *rgb, float *depth, float *final_transmittance, uint32_t
+	                *n_contrib, float *out_color, const float *bg_color);
 
 	// Main rasterization method.
 	void render(

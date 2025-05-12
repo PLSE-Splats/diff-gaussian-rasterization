@@ -274,7 +274,9 @@ template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *radii,
                const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-               const int height, const float * __restrict__ features, float * __restrict__ invdepth) {
+               const int height, const float * __restrict__ features, float * __restrict__ invdepth,
+               float *final_transmittance, uint32_t
+               *n_contrib, float *out_color, const float *bg_color) {
 	// Phase 0: Set up data.
 
 	// 0.1. Gather thread information.
@@ -283,18 +285,29 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 	const auto thread_index = block.thread_index();
 	const auto thread_rank = block.thread_rank();
 
+	// 0.2. Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+	bool done = !pixel_in_bounds;
+
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
-	// 0.2. Initialize helper variables for rendering.
+	// 0.3. Initialize helper variables for rendering.
 	float pixel_transmittance = 1.0f;
 	uint32_t contributing_gaussians_count = 0;
 	uint32_t last_contributing_count = 0;
-	float colors[CHANNELS] = {};
+	float pixel_color[CHANNELS] = {};
 	float expected_invdepth = 0.0f;
+
+	// 0.3.1. Clustering data.
 	float cluster_data[NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS] = {};
 	bool initial_guesses_found = false;
-	bool done = false;
 
-	// 0.2.1. Set transmittance to 1.0 for all clusters.
+	// Set transmittance to 1.0 for all clusters.
 	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
 		cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
 	}
@@ -343,29 +356,17 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 		if (done)
 			continue;
 
-		// 2.1. Gather pixel information.
-		const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
-		const uint2 pixel_coordinate = {
-			minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
-		};
-
-		// 2.2. Mark pixel as done with rendering if it is out of bounds.
-		if (pixel_coordinate.x >= width || pixel_coordinate.y >= height) {
-			done = true;
-			continue;
-		}
-
-		// 2.4. Iterate over Gaussian batch.
+		// 2.2. Iterate over Gaussian batch.
 		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
-			// 2.5.1. Skip if data was not collected.
+			// 2.3.1. Skip if data was not collected.
 			if (collected_index[sample_index] == -1)
 				continue;
 
 			// FIXME: Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
-			// 2.5.2. Mark this Gaussian as a contributor.
+			// 2.3.2. Mark this Gaussian as a contributor.
 			contributing_gaussians_count++;
 
-			// 2.5.2. Compute the alpha.
+			// 2.3.2. Compute the alpha.
 
 			// Resample using conic matrix (cf. "Surface
 			// Splatting" by Zwicker et al., 2001)
@@ -387,21 +388,21 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 			if (sample_alpha < 1.0f / 255.0f)
 				continue;
 
-			// 2.5.3. End rendering if transmittance is too low.
+			// 2.3.3. End rendering if transmittance is too low.
 			if (pixel_transmittance * (1 - sample_alpha) < 0.0001f) {
 				done = true;
 				continue;
 			}
 
-			// 2.5.4. Collect the color
+			// 2.3.4. Collect the color
 			const float sample_r = features[collected_index[sample_index] * CHANNELS + 0];
 			const float sample_g = features[collected_index[sample_index] * CHANNELS + 1];
 			const float sample_b = features[collected_index[sample_index] * CHANNELS + 2];
 
-			// 2.5.5. Collect the depth.
+			// 2.3.5. Collect the depth.
 			const float sample_depth = collected_depth[sample_index];
 
-			// 2.5.6. Do initial cluster guesses or argmin to find cluster.
+			// 2.3.6. Do initial cluster guesses or argmin to find cluster.
 			int target_cluster_index = 0;
 
 			if (!initial_guesses_found) {
@@ -441,7 +442,7 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 				}
 			}
 
-			// 2.5.7. Update cluster information.
+			// 2.3.7. Update cluster information.
 			cluster_data[DATA_AT(target_cluster_index, SPLAT_COUNT_INDEX)]++;
 			cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
 			cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
@@ -455,34 +456,89 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 			                                                           cluster_data[DATA_AT(
 				                                                           target_cluster_index, SPLAT_COUNT_INDEX)];
 
-			// Update invdepth.
+			// 2.3.8. Update invdepth.
 			if (invdepth)
 				expected_invdepth += 1 / collected_depth[sample_index] * sample_alpha * pixel_transmittance;
 
 			pixel_transmittance *= 1 - sample_alpha;
 
-			// Update last contributing count.
+			// 2.3.9. Update last contributing count.
 			last_contributing_count = contributing_gaussians_count;
 		}
 
-		// 2.2. If there are still batches to process, go back to 1.2.
+		// 2.4. If there are still batches to process, go back to 1.1.
 	}
 
-	// 2.3. Once all batches are done, compute final transmittance and color for each cluster.
+	if (pixel_in_bounds) {
+		// 2.3. Once all batches are done, compute final transmittance and color for each cluster.
+		final_transmittance[pixel_index] = pixel_transmittance;
+		n_contrib[pixel_index] = last_contributing_count;
 
-	// Phase 3: Alpha composite the clusters.
+		// Compute final transmittance and color.
+		for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+			cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1 - cluster_data[DATA_AT(
+				                                                            cluster_index, TRANSMITTANCE_INDEX)];
+			cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_R_INDEX)] /= cluster_data[DATA_AT(
+				cluster_index, ALPHA_SUM_INDEX)];
+			cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_G_INDEX)] /= cluster_data[DATA_AT(
+				cluster_index, ALPHA_SUM_INDEX)];
+			cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_B_INDEX)] /= cluster_data[DATA_AT(
+				cluster_index, ALPHA_SUM_INDEX)];
+		}
 
-	// 3.1. Iterate over each cluster.
+		// Phase 3: Alpha composite the clusters.
+		float transmittance = 1.0f;
+		float last_minimum_depth = 0.0f;
 
-	// 3.1.1. Find the closest cluster.
+		// 3.1. Iterate over each cluster.
+		for (int cluster_index_i = 0; cluster_index_i < NUMBER_OF_CLUSTERS; ++cluster_index_i) {
+			// 3.1.1. Find the closest cluster.
+			int target_cluster_index;
+			float current_minimum_depth = FLT_MAX;
+			for (int cluster_index_j = 0; cluster_index_j < NUMBER_OF_CLUSTERS; ++cluster_index_j) {
+				const float this_cluster_depth = cluster_data[DATA_AT(cluster_index_j, DEPTH_INDEX)];
+				if (this_cluster_depth > last_minimum_depth && this_cluster_depth < current_minimum_depth) {
+					current_minimum_depth = this_cluster_depth;
+					target_cluster_index = cluster_index_j;
+				}
+			}
 
-	// 3.1.2. Do any shortcut exits for compositing.
+			// Found the next cluster to process. Update last minimum depth.
+			last_minimum_depth = current_minimum_depth;
 
-	// 3.1.3. Contribute the cluster to the final output color.
+			// Get cluster data.
+			const float cluster_alpha = cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)];
+			const float cluster_r = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)];
+			const float cluster_g = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)];
+			const float cluster_b = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)];
 
-	// 3.1.4. Update the transmittance.
+			// 3.1.2. Do any shortcut exits for compositing.
 
-	// 3.2. Write to output buffer and apply background color.
+			// Skip cluster if it's transparent.
+			if (cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] == 0.0f)
+				continue;
+
+			// Exit once the transmittance is at the minimum.
+			if (transmittance <= MINIMUM_TRANSMITTANCE)
+				break;
+
+			// 3.1.3. Contribute the cluster to the final output color.
+			pixel_color[0] += cluster_alpha * cluster_r * transmittance;
+			pixel_color[1] += cluster_alpha * cluster_g * transmittance;
+			pixel_color[2] += cluster_alpha * cluster_b * transmittance;
+
+			// 3.1.4. Update the transmittance.
+			transmittance *= 1 - min(1.0f, cluster_alpha);
+		}
+		// 3.2. Write to output buffer and apply background color.
+		for (int channel = 0; channel < CHANNELS; channel++)
+			out_color[channel * height * width + pixel_index] =
+					pixel_color[channel] + transmittance * bg_color[channel];
+
+		// 3.3. Write to invdepth buffer.
+		if (invdepth)
+			invdepth[pixel_index] = expected_invdepth;
+	}
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -645,13 +701,16 @@ void FORWARD::render(
 
 void FORWARD::skm_render(const int P, const dim3 grid_size, const dim3 block_size, int *radii,
                          const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-                         const int height, const float *colors_precomp, const float *rgb, float *depth) {
+                         const int height, const float *colors_precomp, const float *rgb, float *depth,
+                         float *final_transmittance, uint32_t *
+                         n_contrib, float *out_color, const float *bg_color) {
 	// Compute number of batches needed to process all Gaussian data.
 	const int batches_count = (P + BLOCK_SIZE - 1) / BLOCK_SIZE;
 	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
 	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, grid_size, batches_count, radii, means_2d,
 	                                                         conic_opacity,
-	                                                         depths, width, height, features, depth);
+	                                                         depths, width, height, features, depth,
+	                                                         final_transmittance, n_contrib, out_color, bg_color);
 }
 
 
