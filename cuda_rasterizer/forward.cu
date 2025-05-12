@@ -274,7 +274,7 @@ template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *radii,
                const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-               const int height, const float * __restrict__ features) {
+               const int height, const float * __restrict__ features, float * __restrict__ invdepth) {
 	// Phase 0: Set up data.
 
 	// 0.1. Gather thread information.
@@ -402,8 +402,67 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 			const float sample_depth = collected_depth[sample_index];
 
 			// 2.5.6. Do initial cluster guesses or argmin to find cluster.
+			int target_cluster_index = 0;
+
+			if (!initial_guesses_found) {
+				// Loop through each non-zero cluster and check for an exact match.
+				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+					// Use the cluster if it's exactly the same depth.
+					if (cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] == sample_depth) {
+						target_cluster_index = cluster_index;
+						break;
+					}
+
+					// Skip if cluster is not empty.
+					if (cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] != 0.0f)
+						continue;
+
+					// Use the cluster if it's empty.
+					target_cluster_index = cluster_index;
+
+					// If all clusters have been initialized, stop looking.
+					if (cluster_index == NUMBER_OF_CLUSTERS - 1)
+						initial_guesses_found = true;
+
+					// We've found a cluster if we got here, so stop looking.
+					break;
+				}
+			} else {
+				float current_closest_depth_distance = FLT_MAX;
+				// If all clusters are initialized, find the closest cluster.
+				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+					// Replace the target index if it's closer.
+					const float distance_to_cluster = fabsf(
+						cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] - sample_depth);
+					if (distance_to_cluster < current_closest_depth_distance) {
+						current_closest_depth_distance = distance_to_cluster;
+						target_cluster_index = cluster_index;
+					}
+				}
+			}
 
 			// 2.5.7. Update cluster information.
+			cluster_data[DATA_AT(target_cluster_index, SPLAT_COUNT_INDEX)]++;
+			cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
+			cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
+			cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha * sample_r;
+			cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha * sample_g;
+			cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha * sample_b;
+
+			// Update cluster mean.
+			const float current_mean = cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)];
+			cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)] = current_mean + (sample_depth - current_mean) /
+			                                                           cluster_data[DATA_AT(
+				                                                           target_cluster_index, SPLAT_COUNT_INDEX)];
+
+			// Update invdepth.
+			if (invdepth)
+				expected_invdepth += 1 / collected_depth[sample_index] * sample_alpha * pixel_transmittance;
+
+			pixel_transmittance *= 1 - sample_alpha;
+
+			// Update last contributing count.
+			last_contributing_count = contributing_gaussians_count;
 		}
 
 		// 2.2. If there are still batches to process, go back to 1.2.
@@ -586,13 +645,13 @@ void FORWARD::render(
 
 void FORWARD::skm_render(const int P, const dim3 grid_size, const dim3 block_size, int *radii,
                          const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-                         const int height, const float *colors_precomp, const float *rgb) {
+                         const int height, const float *colors_precomp, const float *rgb, float *depth) {
 	// Compute number of batches needed to process all Gaussian data.
 	const int batches_count = (P + BLOCK_SIZE - 1) / BLOCK_SIZE;
 	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
 	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, grid_size, batches_count, radii, means_2d,
 	                                                         conic_opacity,
-	                                                         depths, width, height, features);
+	                                                         depths, width, height, features, depth);
 }
 
 

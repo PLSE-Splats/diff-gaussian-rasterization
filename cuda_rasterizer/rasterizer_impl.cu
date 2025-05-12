@@ -278,7 +278,7 @@ int CudaRasterizer::Rasterizer::forward(
 	// One-kernel SKM renderer.
 	CHECK_CUDA(
 		FORWARD::skm_render(P,tile_grid,block,radii,geomState.means2D,geomState.conic_opacity,geomState.depths,width,
-			height,colors_precomp,geomState.rgb),
+			height,colors_precomp,geomState.rgb,depth),
 		debug);
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
