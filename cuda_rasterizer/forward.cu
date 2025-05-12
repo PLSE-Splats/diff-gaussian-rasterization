@@ -272,22 +272,46 @@ __global__ void preprocessCUDA(int P, int D, int M,
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *radii,
-               const float2 *means_2d, const float4 *conic_opacity, const float *depths) {
-	// Gather thread information.
+               const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
+               const int height) {
+	// Phase 0: Set up data.
+
+	// 0.1. Gather thread information.
 	auto block = cg::this_thread_block();
-	const auto block_rank = cg::this_grid().block_rank();
+	const auto group_index = block.group_index();
+	const auto thread_index = block.thread_index();
 	const auto thread_rank = block.thread_rank();
 
-	// Phase 1: As a block.
+	// FIXME: This could be optimized and not declared for out-of-bound pixels.
+	// 0.2. Initialize helper variables for rendering.
+	float pixel_transmittance = 1.0f;
+	uint32_t contributing_gaussians_count = 0;
+	uint32_t last_contributing_count = 0;
+	float colors[CHANNELS] = {};
+	float expected_invdepth = 0.0f;
+	float cluster_data[NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS] = {};
+	bool initial_guesses_found = false;
+	bool done = false;
 
-	// 1.1. Declare shared data structures.
+	// 0.2.1. Set transmittance to 1.0 for all clusters.
+	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+		cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
+	}
+
+	// 0.3. Declare shared data structures.
 	__shared__ int collected_index[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_depth[BLOCK_SIZE];
 
+	// Phase 1: As a block.
+
 	// Loop over batches of Gaussian data.
 	for (int batch_index = 0; batch_index < batches_count; ++batch_index) {
+		// 1.1. Finish rendering if the block is done.
+		if (__syncthreads_count(done) == BLOCK_SIZE)
+			break;
+
 		// 1.2. Reset collected_index.
 		collected_index[thread_rank] = -1;
 
@@ -295,17 +319,15 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 		const int target_gaussian_index = batch_index * BLOCK_SIZE + thread_rank;
 		if (target_gaussian_index < P) {
 			// 1.4 Check if this Gaussian intersects with the tile.
+			const float2 xy = means_2d[target_gaussian_index];
 			uint2 bounds_min, bounds_max;
-			getRect(means_2d[target_gaussian_index], radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
+			getRect(xy, radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
 
-			const int block_x = block_rank % grid_size.x;
-			const int block_y = block_rank / grid_size.x;
-
-			if (block_x >= bounds_min.x && block_x < bounds_max.x &&
-			    block_y >= bounds_min.y && block_y < bounds_max.y) {
+			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+			    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
 				// 1.5. If it does, copy the Gaussian data to shared memory.
 				collected_index[thread_rank] = target_gaussian_index;
-				collected_xy[thread_rank] = means_2d[target_gaussian_index];
+				collected_xy[thread_rank] = xy;
 				collected_conic_opacity[thread_rank] = conic_opacity[target_gaussian_index];
 				collected_depth[thread_rank] = depths[target_gaussian_index];
 			}
@@ -316,19 +338,38 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 
 		// Phase 2: Per pixel
 
-		// 2.1. Iterate over Gaussian batch.
+		// 2.1. Skip if this pixel is done with rendering.
+		if (done)
+			continue;
 
-		// 2.1.1. Skip if it does not intersect with the tile.
+		// 2.1. Gather pixel information.
+		const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+		const uint2 pixel_coordinate = {
+			minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+		};
 
-		// 2.1.2. Compute the alpha.
+		// 2.2. Mark pixel as done with rendering if it is out of bounds.
+		if (pixel_coordinate.x >= width || pixel_coordinate.y >= height) {
+			done = true;
+			continue;
+		}
 
-		// 2.1.3. Collect the color
+		// 2.4. Iterate over Gaussian batch.
+		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
+			// 2.5.1. Skip if data was not collected.
+			if (collected_index[sample_index] == -1)
+				continue;
 
-		// 2.1.4. Collect the depth.
+			// 2.5.2. Compute the alpha.
 
-		// 2.1.5. Do initial cluster guesses or argmin to find cluster.
+			// 2.5.3. Collect the color
 
-		// 2.1.6. Update cluster information.
+			// 2.5.4. Collect the depth.
+
+			// 2.5.5. Do initial cluster guesses or argmin to find cluster.
+
+			// 2.5.6. Update cluster information.
+		}
 
 		// 2.2. If there are still batches to process, go back to 1.2.
 	}
@@ -509,12 +550,13 @@ void FORWARD::render(
 }
 
 void FORWARD::skm_render(const int P, const dim3 grid_size, const dim3 block_size, int *radii,
-                         const float2 *means_2d, const float4 *conic_opacity, const float *depths) {
+                         const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
+                         const int height) {
 	// Compute number of batches needed to process all Gaussian data.
 	const int batches_count = (P + BLOCK_SIZE - 1) / BLOCK_SIZE;
 	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, grid_size, batches_count, radii, means_2d,
 	                                                         conic_opacity,
-	                                                         depths);
+	                                                         depths, width, height);
 }
 
 

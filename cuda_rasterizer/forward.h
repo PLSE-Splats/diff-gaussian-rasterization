@@ -18,6 +18,20 @@
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 
+// SKM parameters.
+#define NUMBER_OF_CLUSTERS 12
+// FIXME: Assumes channels is always 3.
+#define NUMBER_OF_DATA_POINTS 7
+#define DEPTH_INDEX 0
+#define SPLAT_COUNT_INDEX 1
+#define ALPHA_SUM_INDEX 2
+#define TRANSMITTANCE_INDEX 3
+#define PREMULTIPLIED_R_INDEX 4
+#define PREMULTIPLIED_G_INDEX 5
+#define PREMULTIPLIED_B_INDEX 6
+#define MINIMUM_TRANSMITTANCE 0.0001f
+#define DATA_AT(INDEX, DATA) (INDEX * NUMBER_OF_DATA_POINTS + DATA)
+
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
@@ -57,9 +71,11 @@ namespace FORWARD
 	 * @param means_2d Array of 2D coordinates of each Gaussian.
 	 * @param conic_opacity
 	 * @param depths
+	 * @param width
+	 * @param height
 	 */
-	void skm_render(int P, dim3 grid_size, dim3 block_size, int *
-	                radii, const float2 *means_2d, const float4 *conic_opacity, const float *depths);
+	void skm_render(int P, dim3 grid_size, dim3 block_size, int *radii, const float2 *means_2d, const float4 *conic_opacity, const float *
+	                depths, int width, int height);
 
 	// Main rasterization method.
 	void render(
