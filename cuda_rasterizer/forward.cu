@@ -291,34 +291,35 @@ skm_renderCUDA(
 	float * __restrict__ out_color) {
 	// Phase 0: Set up data.
 
-	// 0.1. Gather thread information.
+	// Gather thread information.
 	auto block = cg::this_thread_block();
 	const auto group_index = block.group_index();
 	const auto thread_index = block.thread_index();
 	const auto thread_rank = block.thread_rank();
 
-	// 0.2. Gather pixel information.
+	// Gather pixel information.
 	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
 	const uint2 pixel_coordinate = {
 		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
 	};
 	uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
 
+	// Compute if this thread is associated with a visible pixel.
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+	// Flag for if this pixel is done rendering (automatically is if not visible).
 	bool done = !pixel_in_bounds;
 
+	// Profiling markers.
 	constexpr int profile_pixel_index = 0;
 	unsigned long long fetch_start, cluster_start, render_start;
 
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
-	// 0.3. Initialize helper variables for rendering.
+	// Initialize rendering variables.
 	float pixel_transmittance = 1.0f;
-	uint32_t contributing_gaussians_count = 0;
-	uint32_t last_contributing_count = 0;
 	float pixel_color[CHANNELS] = {};
-	float expected_invdepth = 0.0f;
 
-	// 0.3.1. Clustering data.
+	// Clustering data.
 	float cluster_data[NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS] = {};
 	bool initial_guesses_found = false;
 
@@ -327,13 +328,25 @@ skm_renderCUDA(
 		cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
 	}
 
-	// 0.3. Declare shared data structures.
+	// Contribution counters for backwards pass.
+	uint32_t contributing_gaussians_count = 0;
+	uint32_t last_contributing_count = 0;
+	float expected_invdepth = 0.0f;
+
+	// Declare shared data structures.
+
+	// Which index to start fetching from.
+	int fetch_base_index = 0;
+
+	// Temporary fetch storage.
 	__shared__ int fetched_index[BLOCK_SIZE];
 	__shared__ float2 fetched_xy[BLOCK_SIZE];
 
+	// BlockScan for compacting data.
 	using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
 	__shared__ typename BlockScan::TempStorage temp_storage;
 
+	// Actual storage for collected data.
 	__shared__ int collected_index[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
@@ -342,120 +355,102 @@ skm_renderCUDA(
 	// Where to start putting in fetched data.
 	int collection_write_base_index = 0;
 
-	// Phase 1: As a block.
-
-	int fetch_base_index = 0;
-	while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < P) {
-		// Reset fetched indices.
-		fetched_index[thread_rank] = -1;
-
-		// Fetch the next BLOCk_SIZE amount of data.
-		const int target_gaussian_index = fetch_base_index + thread_rank;
-		if (target_gaussian_index < P) {
-			// Check if this Gaussian intersects with the tile.
-			const float2 xy = means_2d[target_gaussian_index];
-			uint2 bounds_min, bounds_max;
-			getRect(xy, radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
-
-			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-			    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
-				// If it does, copy the Gaussian data to shared memory.
-				fetched_index[thread_rank] = target_gaussian_index;
-				fetched_xy[thread_rank] = xy;
-			}
-		}
-
-		// Sync fetching.
-		block.sync();
-
-		// Valid flag.
-		bool valid = fetched_index[thread_rank] != -1;
-
-		// Compute compacted index and offset into collections.
-		int compacted_index;
-		int valid_count;
-		BlockScan(temp_storage).ExclusiveSum(valid, compacted_index, valid_count);
-		int collection_index = compacted_index + collection_write_base_index;
-
-		// Write to shared memory if in bounds.
-		if (valid && collection_index < BLOCK_SIZE) {
-			collected_index[collection_index] = target_gaussian_index;
-			collected_xy[collection_index] = fetched_xy[thread_rank];
-			collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
-			collected_depth[collection_index] = depths[target_gaussian_index];
-		}
-
-		// Sync writing.
-		block.sync();
-
-		// Update write base index.
-		collection_write_base_index += valid_count;
-
-		// Update fetch base index.
-		if (collection_write_base_index < BLOCK_SIZE) {
-			// If there's still space, keep fetching.
-			fetch_base_index += BLOCK_SIZE;
-		} else {
-			// Otherwise, prepare fetch index to start after the last added index.
-			fetch_base_index = collected_index[BLOCK_SIZE - 1] + 1;
-		}
-	}
-
-	// Loop over batches of Gaussian data.
-	for (int batch_index = 0; batch_index < batches_count; ++batch_index) {
+	// Process the tile until all Gaussians have been processed.
+	while (fetch_base_index < P) {
 		if (pixel_index == profile_pixel_index)
 			fetch_start = clock64();
-		
-		// 1.1. Finish rendering if the block is done.
+
+		// Finish rendering if the block is done.
 		if (__syncthreads_count(done) == BLOCK_SIZE)
 			break;
 
-		// 1.2. Reset collected_index.
-		collected_index[thread_rank] = -1;
+		// Phase 1: Fetch and filter Gaussians for this tile.
 
-		// 1.3. Fetch batch of Gaussian data from global memory to shared memory.
-		const int target_gaussian_index = batch_index * BLOCK_SIZE + thread_rank;
+		// Continue fetching until collection is full or all data is fetched.
+		while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < P) {
+			// Reset fetched data.
+			fetched_index[thread_rank] = -1;
+
+			// Fetch the next BLOCK_SIZE amount of data.
+			const int target_gaussian_index = fetch_base_index + static_cast<int>(thread_rank);
+
+			// If this is a valid Gaussian, check if it intersects with the tile.
 		if (target_gaussian_index < P) {
-			// 1.4 Check if this Gaussian intersects with the tile.
 			const float2 xy = means_2d[target_gaussian_index];
 			uint2 bounds_min, bounds_max;
 			getRect(xy, radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
 
+			// If it does, copy the Gaussian data to shared fetched memory.
 			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
 			    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
-				// 1.5. If it does, copy the Gaussian data to shared memory.
-				collected_index[thread_rank] = target_gaussian_index;
-				collected_xy[thread_rank] = xy;
-				collected_conic_opacity[thread_rank] = conic_opacity[target_gaussian_index];
-				collected_depth[thread_rank] = depths[target_gaussian_index];
+				fetched_index[thread_rank] = target_gaussian_index;
+				fetched_xy[thread_rank] = xy;
 			}
-		}
+			}
+
+			// Sync fetching.
+			block.sync();
+
+			// Compact the fetched data.
+
+			// Valid flag.
+			bool valid = fetched_index[thread_rank] != -1;
+
+			// Compute compacted index and offset into collections.
+			int compacted_index;
+			int valid_count;
+			BlockScan(temp_storage).ExclusiveSum(valid, compacted_index, valid_count);
+			int collection_index = collection_write_base_index + compacted_index;
+
+			// Write to shared collection memory if in bounds.
+			if (valid && collection_index < BLOCK_SIZE) {
+				collected_index[collection_index] = target_gaussian_index;
+				collected_xy[collection_index] = fetched_xy[thread_rank];
+				collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
+				collected_depth[collection_index] = depths[target_gaussian_index];
+			}
+
+			// Update write base index.
+			collection_write_base_index += valid_count;
+
+			// Update fetch base index.
+			if (collection_write_base_index < BLOCK_SIZE) {
+				// If there's still space, keep fetching.
+				fetch_base_index += BLOCK_SIZE;
+			} else {
+				// Otherwise, prepare fetch index to start after the last added index in the next round.
+				fetch_base_index = collected_index[BLOCK_SIZE - 1] + 1;
+			}
+
+			// Sync writing before next fetch.
+			block.sync();
+	}
 
 		if (pixel_index == profile_pixel_index)
 			printf("Fetch:\t%llu\n", clock64() - fetch_start);
 
-		// 1.4 Sync collection.
+		// Sync collection.
 		block.sync();
 
-		// Phase 2: Per pixel
+		// Phase 2: Cluster
 
-		// 2.1. Skip if this pixel is done with rendering.
+		// Skip if this pixel is done with rendering.
 		if (done)
 			continue;
 
-		// 2.2. Iterate over Gaussian batch.
+		// Iterate over Gaussian batch.
 		if (pixel_index == profile_pixel_index)
 			cluster_start = clock64();
 		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
-			// 2.3.1. Skip if data was not collected.
+			// Skip if data was not collected.
 			if (collected_index[sample_index] == -1)
 				continue;
 
 			// FIXME: Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
-			// 2.3.2. Mark this Gaussian as a contributor.
+			// Mark this Gaussian as a contributor.
 			contributing_gaussians_count++;
 
-			// 2.3.2. Compute the alpha.
+			// Compute the alpha.
 
 			// Resample using conic matrix (cf. "Surface
 			// Splatting" by Zwicker et al., 2001)
@@ -477,21 +472,21 @@ skm_renderCUDA(
 			if (sample_alpha < 1.0f / 255.0f)
 				continue;
 
-			// 2.3.3. End rendering if transmittance is too low.
+			// End rendering if transmittance is too low.
 			if (pixel_transmittance * (1 - sample_alpha) < 0.0001f) {
 				done = true;
 				continue;
 			}
 
-			// 2.3.4. Collect the color
+			// Collect the color
 			const float sample_r = features[collected_index[sample_index] * CHANNELS + 0];
 			const float sample_g = features[collected_index[sample_index] * CHANNELS + 1];
 			const float sample_b = features[collected_index[sample_index] * CHANNELS + 2];
 
-			// 2.3.5. Collect the depth.
+			// Collect the depth.
 			const float sample_depth = collected_depth[sample_index];
 
-			// 2.3.6. Do initial cluster guesses or argmin to find cluster.
+			// Do initial cluster guesses or argmin to find cluster.
 			int target_cluster_index = 0;
 
 			if (!initial_guesses_found) {
@@ -531,7 +526,7 @@ skm_renderCUDA(
 				}
 			}
 
-			// 2.3.7. Update cluster information.
+			// Update cluster information.
 			cluster_data[DATA_AT(target_cluster_index, SPLAT_COUNT_INDEX)]++;
 			cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
 			cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
@@ -545,27 +540,28 @@ skm_renderCUDA(
 			                                                           cluster_data[DATA_AT(
 				                                                           target_cluster_index, SPLAT_COUNT_INDEX)];
 
-			// 2.3.8. Update invdepth.
+			// Update invdepth.
 			if (invdepth)
 				expected_invdepth += 1 / collected_depth[sample_index] * sample_alpha * pixel_transmittance;
 
 			pixel_transmittance *= 1 - sample_alpha;
 
-			// 2.3.9. Update last contributing count.
+			// Update last contributing count.
 			last_contributing_count = contributing_gaussians_count;
 		}
 
 		if (pixel_index == profile_pixel_index)
 			printf("Cluster:\t%llu\n", clock64() - cluster_start);
 
-		// 2.4. If there are still batches to process, go back to 1.1.
+		// If there are still batches to process, go back to 1.1.
 	}
 
+	// Phase 3: Alpha composite the clusters.
 	if (pixel_in_bounds) {
 		if (pixel_index == profile_pixel_index)
 			render_start = clock64();
-		
-		// 2.3. Once all batches are done, compute final transmittance and color for each cluster.
+
+		// Once all batches are done, compute final transmittance and color for each cluster.
 		final_transmittance[pixel_index] = pixel_transmittance;
 		n_contrib[pixel_index] = last_contributing_count;
 
@@ -581,11 +577,10 @@ skm_renderCUDA(
 				cluster_index, ALPHA_SUM_INDEX)];
 		}
 
-		// Phase 3: Alpha composite the clusters.
 		float transmittance = 1.0f;
 		float last_minimum_depth = 0.0f;
 
-		// 3.1. Iterate over each cluster.
+		// Iterate over each cluster.
 		for (int cluster_index_i = 0; cluster_index_i < NUMBER_OF_CLUSTERS; ++cluster_index_i) {
 			// 3.1.1. Find the closest cluster.
 			int target_cluster_index;
@@ -607,7 +602,7 @@ skm_renderCUDA(
 			const float cluster_g = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)];
 			const float cluster_b = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)];
 
-			// 3.1.2. Do any shortcut exits for compositing.
+			// Do any shortcut exits for compositing.
 
 			// Skip cluster if it's transparent.
 			if (cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] == 0.0f)
@@ -617,20 +612,20 @@ skm_renderCUDA(
 			if (transmittance <= MINIMUM_TRANSMITTANCE)
 				break;
 
-			// 3.1.3. Contribute the cluster to the final output color.
+			// Contribute the cluster to the final output color.
 			pixel_color[0] += cluster_alpha * cluster_r * transmittance;
 			pixel_color[1] += cluster_alpha * cluster_g * transmittance;
 			pixel_color[2] += cluster_alpha * cluster_b * transmittance;
 
-			// 3.1.4. Update the transmittance.
+			// Update the transmittance.
 			transmittance *= 1 - min(1.0f, cluster_alpha);
 		}
-		// 3.2. Write to output buffer and apply background color.
+		// Write to output buffer and apply background color.
 		for (int channel = 0; channel < CHANNELS; channel++)
 			out_color[channel * height * width + pixel_index] =
 					pixel_color[channel] + transmittance * bg_color[channel];
 
-		// 3.3. Write to invdepth buffer.
+		// Write to invdepth buffer.
 		if (invdepth)
 			invdepth[pixel_index] = expected_invdepth;
 
