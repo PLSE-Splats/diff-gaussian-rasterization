@@ -311,7 +311,7 @@ skm_renderCUDA(
 	bool done = !pixel_in_bounds;
 
 	// Profiling markers.
-	constexpr int profile_pixel_index = 0;
+	const bool is_profile_pixel = pixel_index == 0;
 	unsigned long long fetch_start, cluster_start, render_start;
 
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
@@ -355,10 +355,15 @@ skm_renderCUDA(
 	// Where to start putting in fetched data.
 	int collection_write_base_index = 0;
 
+	if (is_profile_pixel)
+		printf("Post setup.");
+
 	// Continue fetching and clustering until all Gaussians have been processed.
 	while (fetch_base_index < P) {
-		if (pixel_index == profile_pixel_index)
+		if (is_profile_pixel) {
+			printf("\nfetch_base_index at start of process: %d\n", fetch_base_index);
 			fetch_start = clock64();
+		}
 
 		// Finish rendering if the block is done.
 		if (__syncthreads_count(done) == BLOCK_SIZE)
@@ -368,6 +373,10 @@ skm_renderCUDA(
 
 		// Continue fetching until collection is full or all data is fetched.
 		while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < P) {
+			if (is_profile_pixel)
+				printf("collection_write_base_index and fetch_base_index: %d %d\n", collection_write_base_index,
+				       fetch_base_index);
+
 			// Reset fetched data.
 			fetched_index[thread_rank] = -1;
 
@@ -376,15 +385,19 @@ skm_renderCUDA(
 
 			// If this is a valid Gaussian, check if it intersects with the tile.
 			if (target_gaussian_index < P) {
-				const float2 xy = means_2d[target_gaussian_index];
-				uint2 bounds_min, bounds_max;
-				getRect(xy, radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
+				// Only do the computation if the gaussian has a radius.
+				int gaussian_radius = radii[target_gaussian_index];
+				if (gaussian_radius > 0) {
+					const float2 xy = means_2d[target_gaussian_index];
+					uint2 bounds_min, bounds_max;
+					getRect(xy, gaussian_radius, bounds_min, bounds_max, grid_size);
 
-				// If it does, copy the Gaussian data to shared fetched memory.
-				if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-				    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
-					fetched_index[thread_rank] = target_gaussian_index;
-					fetched_xy[thread_rank] = xy;
+					// If the Gaussian intersects, copy the Gaussian data to shared fetched memory.
+					if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+					    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
+						fetched_index[thread_rank] = target_gaussian_index;
+						fetched_xy[thread_rank] = xy;
+					}
 				}
 			}
 
@@ -400,16 +413,19 @@ skm_renderCUDA(
 			int compacted_index;
 			int valid_count;
 			BlockScan(temp_storage).ExclusiveSum(valid, compacted_index, valid_count);
-			int collection_index = collection_write_base_index + compacted_index;
 
+			// Sync compacting.
+			block.sync();
+			
 			// Write to shared collection memory if in bounds.
+			int collection_index = collection_write_base_index + compacted_index;
 			if (valid && collection_index < BLOCK_SIZE) {
 				collected_index[collection_index] = target_gaussian_index;
 				collected_xy[collection_index] = fetched_xy[thread_rank];
 				collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
 				collected_depth[collection_index] = depths[target_gaussian_index];
 			}
-
+			
 			// Update write base index.
 			collection_write_base_index += valid_count;
 
@@ -421,12 +437,9 @@ skm_renderCUDA(
 				// Otherwise, prepare fetch index to start after the last added index in the next round.
 				fetch_base_index = collected_index[BLOCK_SIZE - 1] + 1;
 			}
-
-			// Sync writing before next fetch.
-			block.sync();
 		}
 
-		if (pixel_index == profile_pixel_index)
+		if (is_profile_pixel)
 			printf("Fetch:\t%llu\n", clock64() - fetch_start);
 
 		// Phase 2: Cluster.
@@ -435,7 +448,7 @@ skm_renderCUDA(
 		if (done)
 			continue;
 
-		if (pixel_index == profile_pixel_index)
+		if (is_profile_pixel)
 			cluster_start = clock64();
 		
 		// Iterate over collected batch.
@@ -544,7 +557,7 @@ skm_renderCUDA(
 			last_contributing_count = contributing_gaussians_count;
 		}
 
-		if (pixel_index == profile_pixel_index)
+		if (is_profile_pixel)
 			printf("Cluster:\t%llu\n", clock64() - cluster_start);
 
 		// Continue fetching if there are still Gaussians to process.
@@ -552,7 +565,7 @@ skm_renderCUDA(
 
 	// Phase 3: Alpha composite the clusters.
 	if (pixel_in_bounds) {
-		if (pixel_index == profile_pixel_index)
+		if (is_profile_pixel)
 			render_start = clock64();
 
 		// Once all batches are done, compute final transmittance and color for each cluster.
@@ -623,7 +636,7 @@ skm_renderCUDA(
 		if (invdepth)
 			invdepth[pixel_index] = expected_invdepth;
 
-		if (pixel_index == profile_pixel_index) {
+		if (is_profile_pixel) {
 			printf("Rendering:\t%llu\n", clock64() - render_start);
 			printf("Contrib vs total: %d / %d\n", last_contributing_count, P);
 		}
