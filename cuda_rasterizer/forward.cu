@@ -268,6 +268,54 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
 
+template<uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+skm_renderCUDA(const int P) {
+	// Phase 1: As a block.
+
+	// 1.1. Configure shared data structures.
+
+	// 1.2. Fetch batch of Gaussian data from global memory to shared memory.
+
+	// 1.3. Mark if this Gaussian intersects with the tile at all.
+
+	// 1.4 Sync.
+
+	// Phase 2: Per pixel
+
+	// 2.1. Iterate over Gaussian batch.
+
+	// 2.1.1. Skip if it does not intersect with the tile.
+
+	// 2.1.2. Compute the alpha.
+
+	// 2.1.3. Collect the color
+
+	// 2.1.4. Collect the depth.
+
+	// 2.1.5. Do initial cluster guesses or argmin to find cluster.
+
+	// 2.1.6. Update cluster information.
+
+	// 2.2. If there are still batches to process, go back to 1.2.
+
+	// 2.3. If all batches are done, compute final transmittance and color for each cluster.
+
+	// Phase 3: Alpha composite the clusters.
+
+	// 3.1. Iterate over each cluster.
+
+	// 3.1.1. Find the closest cluster.
+
+	// 3.1.2. Do any shortcut exits for compositing.
+
+	// 3.1.3. Contribute the cluster to the final output color.
+
+	// 3.1.4. Update the transmittance.
+
+	// 3.2. Write to output buffer and apply background color.
+}
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -425,6 +473,11 @@ void FORWARD::render(
 		depths, 
 		depth);
 }
+
+void FORWARD::skm_render(int P) {
+	skm_renderCUDA<NUM_CHANNELS> << <(P + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE >> >(P);
+}
+
 
 void FORWARD::preprocess(int P, int D, int M,
 	const float* means3D,

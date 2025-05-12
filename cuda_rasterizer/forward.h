@@ -47,6 +47,12 @@ namespace FORWARD
 		uint32_t* tiles_touched,
 		bool prefiltered,
 		bool antialiasing);
+	/**
+	 * One-kernel rasterizer using SKM as the clustering algorithm.
+	 * 
+	 * @param P Total number of Gaussian points.
+	 */
+	void skm_render(int P);
 
 	// Main rasterization method.
 	void render(
