@@ -355,7 +355,7 @@ skm_renderCUDA(
 	// Where to start putting in fetched data.
 	int collection_write_base_index = 0;
 
-	// Process the tile until all Gaussians have been processed.
+	// Continue fetching and clustering until all Gaussians have been processed.
 	while (fetch_base_index < P) {
 		if (pixel_index == profile_pixel_index)
 			fetch_start = clock64();
@@ -375,17 +375,17 @@ skm_renderCUDA(
 			const int target_gaussian_index = fetch_base_index + static_cast<int>(thread_rank);
 
 			// If this is a valid Gaussian, check if it intersects with the tile.
-		if (target_gaussian_index < P) {
-			const float2 xy = means_2d[target_gaussian_index];
-			uint2 bounds_min, bounds_max;
-			getRect(xy, radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
+			if (target_gaussian_index < P) {
+				const float2 xy = means_2d[target_gaussian_index];
+				uint2 bounds_min, bounds_max;
+				getRect(xy, radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
 
-			// If it does, copy the Gaussian data to shared fetched memory.
-			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-			    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
-				fetched_index[thread_rank] = target_gaussian_index;
-				fetched_xy[thread_rank] = xy;
-			}
+				// If it does, copy the Gaussian data to shared fetched memory.
+				if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+				    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
+					fetched_index[thread_rank] = target_gaussian_index;
+					fetched_xy[thread_rank] = xy;
+				}
 			}
 
 			// Sync fetching.
@@ -424,29 +424,23 @@ skm_renderCUDA(
 
 			// Sync writing before next fetch.
 			block.sync();
-	}
+		}
 
 		if (pixel_index == profile_pixel_index)
 			printf("Fetch:\t%llu\n", clock64() - fetch_start);
 
-		// Sync collection.
-		block.sync();
-
-		// Phase 2: Cluster
+		// Phase 2: Cluster.
 
 		// Skip if this pixel is done with rendering.
 		if (done)
 			continue;
 
-		// Iterate over Gaussian batch.
 		if (pixel_index == profile_pixel_index)
 			cluster_start = clock64();
+		
+		// Iterate over collected batch.
 		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
-			// Skip if data was not collected.
-			if (collected_index[sample_index] == -1)
-				continue;
-
-			// FIXME: Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
+			// FIXME: This follows OG implementation. Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
 			// Mark this Gaussian as a contributor.
 			contributing_gaussians_count++;
 
@@ -553,7 +547,7 @@ skm_renderCUDA(
 		if (pixel_index == profile_pixel_index)
 			printf("Cluster:\t%llu\n", clock64() - cluster_start);
 
-		// If there are still batches to process, go back to 1.1.
+		// Continue fetching if there are still Gaussians to process.
 	}
 
 	// Phase 3: Alpha composite the clusters.
@@ -582,7 +576,7 @@ skm_renderCUDA(
 
 		// Iterate over each cluster.
 		for (int cluster_index_i = 0; cluster_index_i < NUMBER_OF_CLUSTERS; ++cluster_index_i) {
-			// 3.1.1. Find the closest cluster.
+			// Find the closest cluster.
 			int target_cluster_index;
 			float current_minimum_depth = FLT_MAX;
 			for (int cluster_index_j = 0; cluster_index_j < NUMBER_OF_CLUSTERS; ++cluster_index_j) {
