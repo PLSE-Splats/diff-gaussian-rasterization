@@ -339,7 +339,7 @@ skm_renderCUDA(
 	int fetch_base_index = 0;
 
 	// BlockScan for compacting data.
-	using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
+	using BlockScan = cub::BlockScan<int, BLOCK_X, cub::BLOCK_SCAN_RAKING, BLOCK_Y>;
 	__shared__ BlockScan::TempStorage temp_storage;
 
 	// Storage for collected data.
@@ -348,11 +348,6 @@ skm_renderCUDA(
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_depth[BLOCK_SIZE];
 
-	// Where to start putting in fetched data.
-	int collection_write_base_index = 0;
-
-	if (is_profile_pixel)
-		printf("Post setup.\n");
 
 	// Continue fetching and clustering until all Gaussians have been processed.
 	while (fetch_base_index < P) {
@@ -364,13 +359,12 @@ skm_renderCUDA(
 			break;
 
 		// Phase 1: Fetch and filter Gaussians for this tile.
+		
+		// Where to start putting in fetched data.
+		int collection_write_base_index = 0;
 
 		// Continue fetching until collection is full or all data is fetched.
 		while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < P) {
-			// if (is_profile_pixel)
-			// 	printf("collection_write_base_index and fetch_base_index: %d %d\n", collection_write_base_index,
-			// 	       fetch_base_index);
-
 			// Initialize fetching variables (we assume the fetched data is invalid).
 			bool valid = false;
 			float2 fetched_xy;
@@ -397,8 +391,6 @@ skm_renderCUDA(
 			// Sync fetching.
 			block.sync();
 
-			// Compact the fetched data.
-
 			// Compute compacted index and offset into collections.
 			int compacted_index;
 			int valid_count = 0;
@@ -407,11 +399,8 @@ skm_renderCUDA(
 			// Sync compacting.
 			block.sync();
 
-			if (is_profile_pixel)
-				printf("%d / %d; %d; %d\n", fetch_base_index, P, valid_count, collection_write_base_index);
-
 			// If there was any valid data...
-			if (valid_count > 0 && valid_count < BLOCK_SIZE) {
+			if (valid_count > 0) {
 				// Write valid data to collections if in bounds.
 				int collection_index = collection_write_base_index + compacted_index;
 				if (valid && collection_index < BLOCK_SIZE) {
@@ -440,7 +429,7 @@ skm_renderCUDA(
 		}
 
 		if (is_profile_pixel)
-			printf("Fetch:\t%llu\n", clock64() - fetch_start);
+			printf("Fetch:\t\t%llu\n", clock64() - fetch_start);
 
 		// Phase 2: Cluster.
 
