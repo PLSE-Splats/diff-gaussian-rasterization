@@ -15,6 +15,7 @@
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <cub/block/block_scan.cuh>
 namespace cg = cooperative_groups;
 
 // Forward method for converting the input spherical harmonics
@@ -327,12 +328,78 @@ skm_renderCUDA(
 	}
 
 	// 0.3. Declare shared data structures.
+	__shared__ int fetched_index[BLOCK_SIZE];
+	__shared__ float2 fetched_xy[BLOCK_SIZE];
+
+	using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
+	__shared__ typename BlockScan::TempStorage temp_storage;
+
 	__shared__ int collected_index[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_depth[BLOCK_SIZE];
 
+	// Where to start putting in fetched data.
+	int collection_write_base_index = 0;
+
 	// Phase 1: As a block.
+
+	int fetch_base_index = 0;
+	while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < P) {
+		// Reset fetched indices.
+		fetched_index[thread_rank] = -1;
+
+		// Fetch the next BLOCk_SIZE amount of data.
+		const int target_gaussian_index = fetch_base_index + thread_rank;
+		if (target_gaussian_index < P) {
+			// Check if this Gaussian intersects with the tile.
+			const float2 xy = means_2d[target_gaussian_index];
+			uint2 bounds_min, bounds_max;
+			getRect(xy, radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
+
+			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+			    group_index.y >= bounds_min.y && group_index.y < bounds_max.y) {
+				// If it does, copy the Gaussian data to shared memory.
+				fetched_index[thread_rank] = target_gaussian_index;
+				fetched_xy[thread_rank] = xy;
+			}
+		}
+
+		// Sync fetching.
+		block.sync();
+
+		// Valid flag.
+		bool valid = fetched_index[thread_rank] != -1;
+
+		// Compute compacted index and offset into collections.
+		int compacted_index;
+		int valid_count;
+		BlockScan(temp_storage).ExclusiveSum(valid, compacted_index, valid_count);
+		int collection_index = compacted_index + collection_write_base_index;
+
+		// Write to shared memory if in bounds.
+		if (valid && collection_index < BLOCK_SIZE) {
+			collected_index[collection_index] = target_gaussian_index;
+			collected_xy[collection_index] = fetched_xy[thread_rank];
+			collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
+			collected_depth[collection_index] = depths[target_gaussian_index];
+		}
+
+		// Sync writing.
+		block.sync();
+
+		// Update write base index.
+		collection_write_base_index += valid_count;
+
+		// Update fetch base index.
+		if (collection_write_base_index < BLOCK_SIZE) {
+			// If there's still space, keep fetching.
+			fetch_base_index += BLOCK_SIZE;
+		} else {
+			// Otherwise, prepare fetch index to start after the last added index.
+			fetch_base_index = collected_index[BLOCK_SIZE - 1] + 1;
+		}
+	}
 
 	// Loop over batches of Gaussian data.
 	for (int batch_index = 0; batch_index < batches_count; ++batch_index) {
