@@ -344,7 +344,7 @@ skm_renderCUDA(
 
 	// BlockScan for compacting data.
 	using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
-	__shared__ typename BlockScan::TempStorage temp_storage;
+	__shared__ BlockScan::TempStorage temp_storage;
 
 	// Actual storage for collected data.
 	__shared__ int collected_index[BLOCK_SIZE];
@@ -360,10 +360,8 @@ skm_renderCUDA(
 
 	// Continue fetching and clustering until all Gaussians have been processed.
 	while (fetch_base_index < P) {
-		if (is_profile_pixel) {
-			printf("\nfetch_base_index at start of process: %d\n", fetch_base_index);
+		if (is_profile_pixel)
 			fetch_start = clock64();
-		}
 
 		// Finish rendering if the block is done.
 		if (__syncthreads_count(done) == BLOCK_SIZE)
@@ -416,18 +414,21 @@ skm_renderCUDA(
 
 			// Sync compacting.
 			block.sync();
-			
-			// Write to shared collection memory if in bounds.
+
+			// If there was any valid data fetched, this thread had valid data, and the collection write index is valid, write it to the shared collection.
 			int collection_index = collection_write_base_index + compacted_index;
-			if (valid && collection_index < BLOCK_SIZE) {
+			if (valid_count > 0 && valid_count < BLOCK_SIZE && valid && collection_index < BLOCK_SIZE) {
 				collected_index[collection_index] = target_gaussian_index;
 				collected_xy[collection_index] = fetched_xy[thread_rank];
 				collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
 				collected_depth[collection_index] = depths[target_gaussian_index];
+
+				// Sync writing.
+				block.sync();
+
+				// Update write base index.
+				collection_write_base_index += valid_count;
 			}
-			
-			// Update write base index.
-			collection_write_base_index += valid_count;
 
 			// Update fetch base index.
 			if (collection_write_base_index < BLOCK_SIZE) {
