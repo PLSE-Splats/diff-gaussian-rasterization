@@ -9,6 +9,7 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
+// ReSharper disable CppTooWideScopeInitStatement
 #include "forward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
@@ -270,36 +271,69 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
-skm_renderCUDA(const int P) {
+skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *radii,
+               const float2 *means_2d, const float4 *conic_opacity, const float *depths) {
+	// Gather thread information.
+	auto block = cg::this_thread_block();
+	const auto block_rank = cg::this_grid().block_rank();
+	const auto thread_rank = block.thread_rank();
+
 	// Phase 1: As a block.
 
-	// 1.1. Configure shared data structures.
+	// 1.1. Declare shared data structures.
+	__shared__ int collected_index[BLOCK_SIZE];
+	__shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	__shared__ float collected_depth[BLOCK_SIZE];
 
-	// 1.2. Fetch batch of Gaussian data from global memory to shared memory.
+	// Loop over batches of Gaussian data.
+	for (int batch_index = 0; batch_index < batches_count; ++batch_index) {
+		// 1.2. Reset collected_index.
+		collected_index[thread_rank] = -1;
 
-	// 1.3. Mark if this Gaussian intersects with the tile at all.
+		// 1.3. Fetch batch of Gaussian data from global memory to shared memory.
+		const int target_gaussian_index = batch_index * BLOCK_SIZE + thread_rank;
+		if (target_gaussian_index < P) {
+			// 1.4 Check if this Gaussian intersects with the tile.
+			uint2 bounds_min, bounds_max;
+			getRect(means_2d[target_gaussian_index], radii[target_gaussian_index], bounds_min, bounds_max, grid_size);
 
-	// 1.4 Sync.
+			const int block_x = block_rank % grid_size.x;
+			const int block_y = block_rank / grid_size.x;
 
-	// Phase 2: Per pixel
+			if (block_x >= bounds_min.x && block_x < bounds_max.x &&
+			    block_y >= bounds_min.y && block_y < bounds_max.y) {
+				// 1.5. If it does, copy the Gaussian data to shared memory.
+				collected_index[thread_rank] = target_gaussian_index;
+				collected_xy[thread_rank] = means_2d[target_gaussian_index];
+				collected_conic_opacity[thread_rank] = conic_opacity[target_gaussian_index];
+				collected_depth[thread_rank] = depths[target_gaussian_index];
+			}
+		}
 
-	// 2.1. Iterate over Gaussian batch.
+		// 1.4 Sync collection.
+		block.sync();
 
-	// 2.1.1. Skip if it does not intersect with the tile.
+		// Phase 2: Per pixel
 
-	// 2.1.2. Compute the alpha.
+		// 2.1. Iterate over Gaussian batch.
 
-	// 2.1.3. Collect the color
+		// 2.1.1. Skip if it does not intersect with the tile.
 
-	// 2.1.4. Collect the depth.
+		// 2.1.2. Compute the alpha.
 
-	// 2.1.5. Do initial cluster guesses or argmin to find cluster.
+		// 2.1.3. Collect the color
 
-	// 2.1.6. Update cluster information.
+		// 2.1.4. Collect the depth.
 
-	// 2.2. If there are still batches to process, go back to 1.2.
+		// 2.1.5. Do initial cluster guesses or argmin to find cluster.
 
-	// 2.3. If all batches are done, compute final transmittance and color for each cluster.
+		// 2.1.6. Update cluster information.
+
+		// 2.2. If there are still batches to process, go back to 1.2.
+	}
+
+	// 2.3. Once all batches are done, compute final transmittance and color for each cluster.
 
 	// Phase 3: Alpha composite the clusters.
 
@@ -470,42 +504,46 @@ void FORWARD::render(
 		n_contrib,
 		bg_color,
 		out_color,
-		depths, 
+		depths,
 		depth);
 }
 
-void FORWARD::skm_render(int P) {
-	skm_renderCUDA<NUM_CHANNELS> << <(P + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE >> >(P);
+void FORWARD::skm_render(const int P, const dim3 grid_size, const dim3 block_size, int *radii,
+                         const float2 *means_2d, const float4 *conic_opacity, const float *depths) {
+	// Compute number of batches needed to process all Gaussian data.
+	const int batches_count = (P + BLOCK_SIZE - 1) / BLOCK_SIZE;
+	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, grid_size, batches_count, radii, means_2d,
+	                                                         conic_opacity,
+	                                                         depths);
 }
 
 
 void FORWARD::preprocess(int P, int D, int M,
-	const float* means3D,
-	const glm::vec3* scales,
-	const float scale_modifier,
-	const glm::vec4* rotations,
-	const float* opacities,
-	const float* shs,
-	bool* clamped,
-	const float* cov3D_precomp,
-	const float* colors_precomp,
-	const float* viewmatrix,
-	const float* projmatrix,
-	const glm::vec3* cam_pos,
-	const int W, int H,
-	const float focal_x, float focal_y,
-	const float tan_fovx, float tan_fovy,
-	int* radii,
-	float2* means2D,
-	float* depths,
-	float* cov3Ds,
-	float* rgb,
-	float4* conic_opacity,
-	const dim3 grid,
-	uint32_t* tiles_touched,
-	bool prefiltered,
-	bool antialiasing)
-{
+                         const float *means3D,
+                         const glm::vec3 *scales,
+                         const float scale_modifier,
+                         const glm::vec4 *rotations,
+                         const float *opacities,
+                         const float *shs,
+                         bool *clamped,
+                         const float *cov3D_precomp,
+                         const float *colors_precomp,
+                         const float *viewmatrix,
+                         const float *projmatrix,
+                         const glm::vec3 *cam_pos,
+                         const int W, int H,
+                         const float focal_x, float focal_y,
+                         const float tan_fovx, float tan_fovy,
+                         int *radii,
+                         float2 *means2D,
+                         float *depths,
+                         float *cov3Ds,
+                         float *rgb,
+                         float4 *conic_opacity,
+                         const dim3 grid,
+                         uint32_t *tiles_touched,
+                         bool prefiltered,
+                         bool antialiasing) {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
 		means3D,

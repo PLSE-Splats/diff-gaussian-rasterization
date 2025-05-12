@@ -275,6 +275,10 @@ int CudaRasterizer::Rasterizer::forward(
 		antialiasing
 	), debug)
 
+	// One-kernel SKM renderer.
+	CHECK_CUDA(FORWARD::skm_render(P,tile_grid,block,radii,geomState.means2D,geomState.conic_opacity,geomState.depths),
+	           debug);
+
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
 	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)

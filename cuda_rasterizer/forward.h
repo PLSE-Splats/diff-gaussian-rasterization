@@ -51,8 +51,15 @@ namespace FORWARD
 	 * One-kernel rasterizer using SKM as the clustering algorithm.
 	 * 
 	 * @param P Total number of Gaussian points.
+	 * @param grid_size Number of blocks to launch (number of tiles in the image).
+	 * @param block_size Number of threads per block (size of a tile).
+	 * @param radii
+	 * @param means_2d Array of 2D coordinates of each Gaussian.
+	 * @param conic_opacity
+	 * @param depths
 	 */
-	void skm_render(int P);
+	void skm_render(int P, dim3 grid_size, dim3 block_size, int *
+	                radii, const float2 *means_2d, const float4 *conic_opacity, const float *depths);
 
 	// Main rasterization method.
 	void render(
