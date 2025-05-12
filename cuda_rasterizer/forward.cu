@@ -283,8 +283,10 @@ renderCUDA(
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
 	const float4* __restrict__ conic_opacity,
-	float* __restrict__ final_T,
-	uint32_t* __restrict__ n_contrib,
+	float* __restrict__ cluster_depth,
+	float* __restrict__ cluster_alpha,
+	float* __restrict__ cluster_alpha_sum,
+	float* __restrict__ cluster_color,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	const float* __restrict__ depths,
@@ -510,9 +512,6 @@ renderCUDA(
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
 	{
-		final_T[pix_id] = T;
-		n_contrib[pix_id] = last_contributor;
-
 		// Compute final transmittance and color.
 		for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index)
 		{
@@ -550,11 +549,18 @@ renderCUDA(
 			last_minimum_depth = current_minimum_depth;
 
 			// Get cluster data.
-			const float cluster_alpha = cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)];
+			const float cluster_a = cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)];
 			const float cluster_r = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)];
 			const float cluster_g = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)];
 			const float cluster_b = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)];
 
+			cluster_depth[NUMBER_OF_CLUSTERS * pix_id + target_cluster_index] = last_minimum_depth;
+			cluster_alpha[NUMBER_OF_CLUSTERS * pix_id + target_cluster_index] = cluster_a;
+			cluster_alpha_sum[NUMBER_OF_CLUSTERS * pix_id + target_cluster_index] = cluster_data[DATA_AT(
+				target_cluster_index, ALPHA_SUM_INDEX)];
+			cluster_color[(NUMBER_OF_CLUSTERS * pix_id + target_cluster_index) * 3] = cluster_r;
+			cluster_color[(NUMBER_OF_CLUSTERS * pix_id + target_cluster_index) * 3 + 1] = cluster_g;
+			cluster_color[(NUMBER_OF_CLUSTERS * pix_id + target_cluster_index) * 3 + 2] = cluster_b;
 
 			// Skip cluster if it's transparent.
 			if (cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] == 0.0f)
@@ -565,12 +571,12 @@ renderCUDA(
 				break;
 
 			// Contribute to the final color.
-			C[0] += cluster_alpha * cluster_r * transmittance;
-			C[1] += cluster_alpha * cluster_g * transmittance;
-			C[2] += cluster_alpha * cluster_b * transmittance;
+			C[0] += cluster_a * cluster_r * transmittance;
+			C[1] += cluster_a * cluster_g * transmittance;
+			C[2] += cluster_a * cluster_b * transmittance;
 
 			// Update transmittance.
-			transmittance *= 1 - min(1.0f, cluster_alpha);
+			transmittance *= 1 - min(1.0f, cluster_a);
 		}
 
 		for (int ch = 0; ch < CHANNELS; ch++)
@@ -592,8 +598,10 @@ void FORWARD::render(
 	const float2* means2D,
 	const float* colors,
 	const float4* conic_opacity,
-	float* final_T,
-	uint32_t* n_contrib,
+	float* cluster_depth,
+	float* cluster_alpha,
+	float* cluster_alpha_sum,
+	float* cluster_color,
 	const float* bg_color,
 	float* out_color,
 	float* depths,
@@ -609,8 +617,10 @@ void FORWARD::render(
 		means2D,
 		colors,
 		conic_opacity,
-		final_T,
-		n_contrib,
+		cluster_depth,
+		cluster_alpha,
+		cluster_alpha_sum,
+		cluster_color,
 		bg_color,
 		out_color,
 		depths,

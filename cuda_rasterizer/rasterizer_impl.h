@@ -39,6 +39,8 @@ namespace CudaRasterizer
 		float* rgb;
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
+		uint32_t* global_splat_order;
+		int global_splats_count;
 
 		static GeometryState fromChunk(char*& chunk, size_t P);
 	};
@@ -46,8 +48,12 @@ namespace CudaRasterizer
 	struct ImageState
 	{
 		uint2* ranges;
-		uint32_t* n_contrib;
-		float* accum_alpha;
+		// uint32_t* n_contrib;
+		// float* accum_alpha;
+		float* cluster_depth;
+		float* cluster_alpha;
+		float* cluster_alpha_sum;
+		float* cluster_color;
 
 		static ImageState fromChunk(char*& chunk, size_t N);
 	};

@@ -18,20 +18,38 @@
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 
+// SKM parameters.
+#define NUMBER_OF_CLUSTERS 12
+// FIXME: Assumes channels is always 3.
+#define NUMBER_OF_DATA_POINTS 7
+#define DEPTH_INDEX 0
+#define SPLAT_COUNT_INDEX 1
+#define ALPHA_SUM_INDEX 2
+#define TRANSMITTANCE_INDEX 3
+#define PREMULTIPLIED_R_INDEX 4
+#define PREMULTIPLIED_G_INDEX 5
+#define PREMULTIPLIED_B_INDEX 6
+#define MINIMUM_TRANSMITTANCE 0.0001f
+#define DATA_AT(INDEX, DATA) (INDEX * NUMBER_OF_DATA_POINTS + DATA)
+
 namespace BACKWARD
 {
 	void render(
 		const dim3 grid, dim3 block,
 		const uint2* ranges,
 		const uint32_t* point_list,
+		const uint32_t* global_splat_id_list,
+		const int splat_id_count,
 		int W, int H,
 		const float* bg_color,
 		const float2* means2D,
 		const float4* conic_opacity,
 		const float* colors,
 		const float* depths,
-		const float* final_Ts,
-		const uint32_t* n_contrib,
+		const float* cluster_depth,
+		const float* cluster_alpha,
+		const float* cluster_alpha_sum,
+		const float* cluster_color,
 		const float* dL_dpixels,
 		const float* dL_invdepths,
 		float3* dL_dmean2D,

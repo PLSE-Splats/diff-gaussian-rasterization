@@ -175,8 +175,11 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, size_t N)
 {
 	ImageState img;
-	obtain(chunk, img.accum_alpha, N, 128);
-	obtain(chunk, img.n_contrib, N, 128);
+	obtain(chunk, img.cluster_alpha, N * NUMBER_OF_CLUSTERS, 128);
+	obtain(chunk, img.cluster_color, N * NUMBER_OF_CLUSTERS * 3, 128);
+	obtain(chunk, img.cluster_alpha_sum, N * NUMBER_OF_CLUSTERS, 128);
+	obtain(chunk, img.cluster_depth, N * NUMBER_OF_CLUSTERS, 128);
+
 	obtain(chunk, img.ranges, N, 128);
 	return img;
 }
@@ -340,12 +343,13 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Create splat order list for GPU and transfer.
 	uint32_t* global_splat_id_order;
-	CHECK_CUDA(cudaMalloc(&global_splat_id_order, unique_ids_shuffle.size() * sizeof(uint32_t)), debug);
+	CHECK_CUDA(cudaMalloc((void**)&global_splat_id_order, unique_ids_shuffle.size() * sizeof(uint32_t)), debug);
 	CHECK_CUDA(cudaMemcpy(global_splat_id_order, unique_ids_shuffle.data(), unique_ids_shuffle.size() * sizeof(uint32_t), cudaMemcpyHostToDevice), debug);
-
+	geomState.global_splat_order = global_splat_id_order;
+	geomState.global_splats_count = static_cast<int>(unique_ids_shuffle.size());
+	
 	// Free host memory.
 	delete[] host_point_list;
-	
 
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
@@ -354,14 +358,16 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.ranges,
 		binningState.point_list_keys,
 		binningState.point_list,
-		global_splat_id_order,
+		geomState.global_splat_order,
 		num_rendered,
 		width, height,
 		geomState.means2D,
 		feature_ptr,
 		geomState.conic_opacity,
-		imgState.accum_alpha,
-		imgState.n_contrib,
+		imgState.cluster_depth,
+		imgState.cluster_alpha,
+		imgState.cluster_alpha_sum,
+		imgState.cluster_color,
 		background,
 		out_color,
 		geomState.depths,
@@ -431,14 +437,18 @@ void CudaRasterizer::Rasterizer::backward(
 		block,
 		imgState.ranges,
 		binningState.point_list,
+		geomState.global_splat_order,
+		geomState.global_splats_count,
 		width, height,
 		background,
 		geomState.means2D,
 		geomState.conic_opacity,
 		color_ptr,
 		geomState.depths,
-		imgState.accum_alpha,
-		imgState.n_contrib,
+		imgState.cluster_depth,
+		imgState.cluster_alpha,
+		imgState.cluster_alpha_sum,
+		imgState.cluster_color,
 		dL_dpix,
 		dL_invdepths,
 		(float3*)dL_dmean2D,
@@ -477,4 +487,6 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec3*)dL_dscale,
 		(glm::vec4*)dL_drot,
 		antialiasing), debug);
+	
+	CHECK_CUDA(cudaFree(geomState.global_splat_order), debug);
 }
