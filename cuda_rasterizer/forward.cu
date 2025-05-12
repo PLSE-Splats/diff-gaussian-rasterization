@@ -10,6 +10,7 @@
  */
 
 // ReSharper disable CppTooWideScopeInitStatement
+// ReSharper disable CppUseStructuredBinding
 #include "forward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
@@ -273,7 +274,7 @@ template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *radii,
                const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-               const int height) {
+               const int height, const float * __restrict__ features) {
 	// Phase 0: Set up data.
 
 	// 0.1. Gather thread information.
@@ -360,15 +361,49 @@ skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *
 			if (collected_index[sample_index] == -1)
 				continue;
 
+			// FIXME: Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
+			// 2.5.2. Mark this Gaussian as a contributor.
+			contributing_gaussians_count++;
+
 			// 2.5.2. Compute the alpha.
 
-			// 2.5.3. Collect the color
+			// Resample using conic matrix (cf. "Surface
+			// Splatting" by Zwicker et al., 2001)
+			const float2 sample_coordinate = collected_xy[sample_index];
+			const float2 d = {
+				sample_coordinate.x - static_cast<float>(pixel_coordinate.x),
+				sample_coordinate.y - static_cast<float>(pixel_coordinate.y)
+			};
+			const float4 con_o = collected_conic_opacity[sample_index];
+			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+			if (power > 0.0f)
+				continue;
 
-			// 2.5.4. Collect the depth.
+			// Eq. (2) from 3D Gaussian splatting paper.
+			// Obtain alpha by multiplying with Gaussian opacity
+			// and its exponential falloff from mean.
+			// Avoid numerical instabilities (see paper appendix).
+			const float sample_alpha = min(0.99f, con_o.w * exp(power));
+			if (sample_alpha < 1.0f / 255.0f)
+				continue;
 
-			// 2.5.5. Do initial cluster guesses or argmin to find cluster.
+			// 2.5.3. End rendering if transmittance is too low.
+			if (pixel_transmittance * (1 - sample_alpha) < 0.0001f) {
+				done = true;
+				continue;
+			}
 
-			// 2.5.6. Update cluster information.
+			// 2.5.4. Collect the color
+			const float sample_r = features[collected_index[sample_index] * CHANNELS + 0];
+			const float sample_g = features[collected_index[sample_index] * CHANNELS + 1];
+			const float sample_b = features[collected_index[sample_index] * CHANNELS + 2];
+
+			// 2.5.5. Collect the depth.
+			const float sample_depth = collected_depth[sample_index];
+
+			// 2.5.6. Do initial cluster guesses or argmin to find cluster.
+
+			// 2.5.7. Update cluster information.
 		}
 
 		// 2.2. If there are still batches to process, go back to 1.2.
@@ -551,12 +586,13 @@ void FORWARD::render(
 
 void FORWARD::skm_render(const int P, const dim3 grid_size, const dim3 block_size, int *radii,
                          const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-                         const int height) {
+                         const int height, const float *colors_precomp, const float *rgb) {
 	// Compute number of batches needed to process all Gaussian data.
 	const int batches_count = (P + BLOCK_SIZE - 1) / BLOCK_SIZE;
+	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
 	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, grid_size, batches_count, radii, means_2d,
 	                                                         conic_opacity,
-	                                                         depths, width, height);
+	                                                         depths, width, height, features);
 }
 
 
