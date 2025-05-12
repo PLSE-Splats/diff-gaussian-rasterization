@@ -67,23 +67,37 @@ namespace FORWARD
 	 * @param P Total number of Gaussian points.
 	 * @param grid_size Number of blocks to launch (number of tiles in the image).
 	 * @param block_size Number of threads per block (size of a tile).
-	 * @param radii
+	 * @param width Image width.
+	 * @param height Image height.
+	 * @param radii Array of radii for each Gaussian.
 	 * @param means_2d Array of 2D coordinates of each Gaussian.
-	 * @param conic_opacity
-	 * @param depths
-	 * @param width
-	 * @param height
-	 * @param colors_precomp
-	 * @param rgb
-	 * @param depth
-	 * @param final_transmittance
-	 * @param n_contrib
-	 * @param out_color
-	 * @param bg_color
+	 * @param conic_opacity Array of conic opacity values for each Gaussian.
+	 * @param depths Array of depth values for each Gaussian.
+	 * @param depth Array of depth values for each pixel in the image.
+	 * @param colors_precomp Array of precomputed colors for each Gaussian.
+	 * @param rgb Array of RGB values for each pixel in the image.
+	 * @param final_transmittance Array of final transmittance values for each pixel in the image.
+	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
+	 * @param bg_color Background color for the image.
+	 * @param out_color Rendered output color for each pixel in the image.
 	 */
-	void skm_render(int P, dim3 grid_size, dim3 block_size, int *radii, const float2 *means_2d, const float4 *conic_opacity, const float *
-	                depths, int width, int height, const float *colors_precomp, const float *rgb, float *depth, float *final_transmittance, uint32_t
-	                *n_contrib, float *out_color, const float *bg_color);
+	void skm_render(
+		int P,
+		dim3 grid_size,
+		dim3 block_size,
+		int width,
+		int height,
+		int *radii,
+		const float2 *means_2d,
+		const float4 *conic_opacity,
+		const float *depths,
+		float *depth,
+		const float *colors_precomp,
+		const float *rgb,
+		float *final_transmittance,
+		uint32_t *n_contrib,
+		const float *bg_color,
+		float *out_color);
 
 	// Main rasterization method.
 	void render(

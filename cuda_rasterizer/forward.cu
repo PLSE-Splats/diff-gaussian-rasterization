@@ -272,11 +272,22 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
-skm_renderCUDA(const int P, const dim3 grid_size, const int batches_count, int *radii,
-               const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-               const int height, const float * __restrict__ features, float * __restrict__ invdepth,
-               float *final_transmittance, uint32_t
-               *n_contrib, float *out_color, const float *bg_color) {
+skm_renderCUDA(
+	const int P,
+	const int width,
+	const int height,
+	const dim3 grid_size,
+	const int batches_count,
+	int * __restrict__ radii,
+	const float2 * __restrict__ means_2d,
+	const float4 * __restrict__ conic_opacity,
+	const float * __restrict__ depths,
+	float * __restrict__ invdepth,
+	const float * __restrict__ features,
+	float * __restrict__ final_transmittance,
+	uint32_t * __restrict__ n_contrib,
+	const float * __restrict__ bg_color,
+	float * __restrict__ out_color) {
 	// Phase 0: Set up data.
 
 	// 0.1. Gather thread information.
@@ -699,18 +710,43 @@ void FORWARD::render(
 		depth);
 }
 
-void FORWARD::skm_render(const int P, const dim3 grid_size, const dim3 block_size, int *radii,
-                         const float2 *means_2d, const float4 *conic_opacity, const float *depths, const int width,
-                         const int height, const float *colors_precomp, const float *rgb, float *depth,
-                         float *final_transmittance, uint32_t *
-                         n_contrib, float *out_color, const float *bg_color) {
+void FORWARD::skm_render(
+	const int P,
+	const dim3 grid_size,
+	const dim3 block_size,
+	const int width,
+	const int height,
+	int *radii,
+	const float2 *means_2d,
+	const float4 *conic_opacity,
+	const float *depths,
+	float *depth,
+	const float *colors_precomp,
+	const float *rgb,
+	float *final_transmittance,
+	uint32_t *n_contrib,
+	const float *bg_color,
+	float *out_color) {
 	// Compute number of batches needed to process all Gaussian data.
 	const int batches_count = (P + BLOCK_SIZE - 1) / BLOCK_SIZE;
 	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
-	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, grid_size, batches_count, radii, means_2d,
-	                                                         conic_opacity,
-	                                                         depths, width, height, features, depth,
-	                                                         final_transmittance, n_contrib, out_color, bg_color);
+
+	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
+		P,
+		width,
+		height,
+		grid_size,
+		batches_count,
+		radii,
+		means_2d,
+		conic_opacity,
+		depths,
+		depth,
+		features,
+		final_transmittance,
+		n_contrib,
+		bg_color,
+		out_color);
 }
 
 
