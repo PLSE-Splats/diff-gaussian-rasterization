@@ -306,6 +306,9 @@ skm_renderCUDA(
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
 	bool done = !pixel_in_bounds;
 
+	constexpr int profile_pixel_index = 0;
+	unsigned long long fetch_start, cluster_start, render_start;
+
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
 	// 0.3. Initialize helper variables for rendering.
 	float pixel_transmittance = 1.0f;
@@ -333,6 +336,9 @@ skm_renderCUDA(
 
 	// Loop over batches of Gaussian data.
 	for (int batch_index = 0; batch_index < batches_count; ++batch_index) {
+		if (pixel_index == profile_pixel_index)
+			fetch_start = clock64();
+		
 		// 1.1. Finish rendering if the block is done.
 		if (__syncthreads_count(done) == BLOCK_SIZE)
 			break;
@@ -358,6 +364,9 @@ skm_renderCUDA(
 			}
 		}
 
+		if (pixel_index == profile_pixel_index)
+			printf("Fetch:\t%llu\n", clock64() - fetch_start);
+
 		// 1.4 Sync collection.
 		block.sync();
 
@@ -368,6 +377,8 @@ skm_renderCUDA(
 			continue;
 
 		// 2.2. Iterate over Gaussian batch.
+		if (pixel_index == profile_pixel_index)
+			cluster_start = clock64();
 		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
 			// 2.3.1. Skip if data was not collected.
 			if (collected_index[sample_index] == -1)
@@ -477,10 +488,16 @@ skm_renderCUDA(
 			last_contributing_count = contributing_gaussians_count;
 		}
 
+		if (pixel_index == profile_pixel_index)
+			printf("Cluster:\t%llu\n", clock64() - cluster_start);
+
 		// 2.4. If there are still batches to process, go back to 1.1.
 	}
 
 	if (pixel_in_bounds) {
+		if (pixel_index == profile_pixel_index)
+			render_start = clock64();
+		
 		// 2.3. Once all batches are done, compute final transmittance and color for each cluster.
 		final_transmittance[pixel_index] = pixel_transmittance;
 		n_contrib[pixel_index] = last_contributing_count;
@@ -549,6 +566,11 @@ skm_renderCUDA(
 		// 3.3. Write to invdepth buffer.
 		if (invdepth)
 			invdepth[pixel_index] = expected_invdepth;
+
+		if (pixel_index == profile_pixel_index) {
+			printf("Rendering:\t%llu\n", clock64() - render_start);
+			printf("Contrib vs total: %d / %d\n", last_contributing_count, P);
+		}
 	}
 }
 
