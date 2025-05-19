@@ -196,6 +196,7 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
 		binning.point_list_keys_unsorted, binning.point_list_keys,
 		binning.point_list_unsorted, binning.point_list, P);
 	obtain(chunk, binning.list_sorting_space, binning.sorting_size, 128);
+	obtain(chunk, binning.global_splat_order, P, 128);
 	return binning;
 }
 
@@ -345,8 +346,12 @@ int CudaRasterizer::Rasterizer::forward(
 	uint32_t* global_splat_id_order;
 	CHECK_CUDA(cudaMalloc((void**)&global_splat_id_order, unique_ids_shuffle.size() * sizeof(uint32_t)), debug);
 	CHECK_CUDA(cudaMemcpy(global_splat_id_order, unique_ids_shuffle.data(), unique_ids_shuffle.size() * sizeof(uint32_t), cudaMemcpyHostToDevice), debug);
-	geomState.global_splat_order = global_splat_id_order;
-	geomState.global_splats_count = static_cast<int>(unique_ids_shuffle.size());
+	binningState.global_splat_order = global_splat_id_order;
+
+	uint64_t* global_splats_count;
+	CHECK_CUDA(cudaMalloc((void**)&global_splats_count, sizeof(uint64_t)), debug);
+	CHECK_CUDA(cudaMemcpy(global_splats_count, &num_rendered, sizeof(uint64_t), cudaMemcpyHostToDevice), debug);
+	binningState.global_splats_count = global_splats_count;
 	
 	// Free host memory.
 	delete[] host_point_list;
@@ -358,8 +363,8 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.ranges,
 		binningState.point_list_keys,
 		binningState.point_list,
-		geomState.global_splat_order,
-		num_rendered,
+		binningState.global_splat_order,
+		binningState.global_splats_count,
 		width, height,
 		geomState.means2D,
 		feature_ptr,
@@ -437,8 +442,8 @@ void CudaRasterizer::Rasterizer::backward(
 		block,
 		imgState.ranges,
 		binningState.point_list,
-		geomState.global_splat_order,
-		geomState.global_splats_count,
+		binningState.global_splat_order,
+		binningState.global_splats_count,
 		width, height,
 		background,
 		geomState.means2D,
@@ -487,6 +492,4 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec3*)dL_dscale,
 		(glm::vec4*)dL_drot,
 		antialiasing), debug);
-	
-	CHECK_CUDA(cudaFree(geomState.global_splat_order), debug);
 }

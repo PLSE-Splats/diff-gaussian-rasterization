@@ -39,8 +39,6 @@ namespace CudaRasterizer
 		float* rgb;
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
-		uint32_t* global_splat_order;
-		int global_splats_count;
 
 		static GeometryState fromChunk(char*& chunk, size_t P);
 	};
@@ -66,6 +64,8 @@ namespace CudaRasterizer
 		uint32_t* point_list_unsorted;
 		uint32_t* point_list;
 		char* list_sorting_space;
+		uint32_t* global_splat_order;
+		uint64_t* global_splats_count;
 
 		static BinningState fromChunk(char*& chunk, size_t P);
 	};

@@ -39,7 +39,7 @@ namespace BACKWARD
 		const uint2* ranges,
 		const uint32_t* point_list,
 		const uint32_t* global_splat_id_list,
-		const int splat_id_count,
+		const uint64_t* splat_id_count,
 		int W, int H,
 		const float* bg_color,
 		const float2* means2D,

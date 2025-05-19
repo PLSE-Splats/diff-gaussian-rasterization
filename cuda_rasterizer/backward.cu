@@ -455,7 +455,7 @@ renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	const uint32_t* __restrict__ global_splat_id_list,
-	const int splat_id_count,
+	const uint64_t* __restrict__ splat_id_count,
 	int W, int H,
 	const float* __restrict__ bg_color,
 	const float2* __restrict__ points_xy_image,
@@ -477,6 +477,9 @@ renderCUDA(
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
+	if (block.group_index().x == 0 && block.thread_rank() == 0)
+    	printf("Backward pass stop point 01\n");
+
 	const uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	const uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
 	const uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
@@ -492,7 +495,7 @@ renderCUDA(
 	bool done = !inside;
 	int toDo = range.y - range.x;
 
-	#define MAX_TODO 10000
+	#define MAX_TODO 6000
 
 	// Define the list of ID's for this block resorted to match the global order.
 	__shared__ uint32_t sorted_point_list[MAX_TODO];
@@ -506,7 +509,8 @@ renderCUDA(
 	block.sync();
 
 	// Check through the global_splat_id_list to find the next splat in this block.
-	for (int global_index = 0; global_index < splat_id_count && next_sorted_point_list_position < toDo; ++
+	uint64_t splat_count = *splat_id_count;
+	for (int global_index = 0; global_index < splat_count && next_sorted_point_list_position < toDo; ++
 	     global_index) {
 		// Get the current global id to check.
 		if (block.thread_rank() == 0) {
@@ -529,6 +533,9 @@ renderCUDA(
 		// Sync threads to ensure that all threads have finished checking the current_global_id.
 		block.sync();
 	}
+
+	if (block.group_index().x == 0 && block.thread_rank() == 0)
+    	printf("Backward pass stop point 02\n");
 
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
@@ -572,6 +579,9 @@ renderCUDA(
 		transmittance *= (1.0f - cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)]);
 	}
 
+	if (block.group_index().x == 0 && block.thread_rank() == 0)
+    	printf("Starting kernel with splat count: %llu\n", *splat_id_count);
+
 	// Traverse all Gaussians
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
 	{
@@ -581,7 +591,7 @@ renderCUDA(
 		const int progress = i * BLOCK_SIZE + block.thread_rank();
 		if (range.x + progress < range.y)
 		{
-			const int coll_id = point_list[progress];
+			const int coll_id = sorted_point_list[progress];
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
@@ -787,7 +797,7 @@ void BACKWARD::render(
 	const uint2* ranges,
 	const uint32_t* point_list,
 	const uint32_t* splat_id_order,
-	const int splat_id_count,
+	const uint64_t* splat_id_count,
 	int W, int H,
 	const float* bg_color,
 	const float2* means2D,

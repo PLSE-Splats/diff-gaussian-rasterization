@@ -278,7 +278,7 @@ renderCUDA(
 	const uint64_t* __restrict__ point_list_key,
 	const uint32_t* __restrict__ point_list,
 	const uint32_t* __restrict__ global_splat_id_list,
-	const int splat_id_count,
+	const uint64_t* __restrict__ splat_id_count,
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
@@ -312,7 +312,7 @@ renderCUDA(
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	int toDo = range.y - range.x;
 
-#define MAX_TODO 10000
+#define MAX_TODO 6000
 
 	// Define the list of ID's for this block resorted to match the global order.
 	__shared__ uint32_t sorted_point_list[MAX_TODO];
@@ -326,7 +326,9 @@ renderCUDA(
 	block.sync();
 
 	// Check through the global_splat_id_list to find the next splat in this block.
-	for (int global_index = 0; global_index < splat_id_count && next_sorted_point_list_position < toDo; ++
+	uint64_t splat_count = *splat_id_count;
+
+	for (int global_index = 0; global_index < splat_count && next_sorted_point_list_position < toDo; ++
 	     global_index) {
 		// Get the current global id to check.
 		if (block.thread_rank() == 0) {
@@ -593,7 +595,7 @@ void FORWARD::render(
 	const uint64_t* point_list_key,
 	const uint32_t* point_list,
 	const uint32_t* global_splat_id_list,
-	const int splat_id_count,
+	const uint64_t* splat_id_count,
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
