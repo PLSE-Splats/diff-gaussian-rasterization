@@ -45,9 +45,7 @@ namespace CudaRasterizer
 
 	struct ImageState
 	{
-		uint2* ranges;
-		uint32_t* n_contrib;
-		float* accum_alpha;
+		float* cluster_data;
 
 		static ImageState fromChunk(char*& chunk, size_t N);
 	};

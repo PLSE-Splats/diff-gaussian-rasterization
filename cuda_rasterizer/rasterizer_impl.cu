@@ -172,9 +172,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, size_t N)
 {
 	ImageState img;
-	obtain(chunk, img.accum_alpha, N, 128);
-	obtain(chunk, img.n_contrib, N, 128);
-	obtain(chunk, img.ranges, N, 128);
+	obtain(chunk, img.cluster_data, N * NUMBER_OF_CLUSTERS * NUMBER_OF_CLUSTER_DATA_POINTS, 128);
 	return img;
 }
 
@@ -221,6 +219,7 @@ int CudaRasterizer::Rasterizer::forward(
 	int* radii,
 	bool debug)
 {
+	debug = true;
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
 
@@ -289,8 +288,7 @@ int CudaRasterizer::Rasterizer::forward(
 		           depth,
 		           colors_precomp,
 		           geomState.rgb,
-		           imgState.accum_alpha,
-		           imgState.n_contrib,
+				   imgState.cluster_data,
 		           background,
 		           out_color
 	           ), debug);
@@ -336,6 +334,7 @@ void CudaRasterizer::Rasterizer::backward(
 	bool antialiasing,
 	bool debug)
 {
+	debug = true;
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
 	ImageState imgState = ImageState::fromChunk(img_buffer, width * height);
@@ -358,16 +357,15 @@ void CudaRasterizer::Rasterizer::backward(
 	CHECK_CUDA(BACKWARD::render(
 		tile_grid,
 		block,
-		imgState.ranges,
-		binningState.point_list,
+		P,
 		width, height,
 		background,
 		geomState.means2D,
 		geomState.conic_opacity,
 		color_ptr,
 		geomState.depths,
-		imgState.accum_alpha,
-		imgState.n_contrib,
+		radii,
+		imgState.cluster_data,
 		dL_dpix,
 		dL_invdepths,
 		(float3*)dL_dmean2D,

@@ -279,14 +279,13 @@ skm_renderCUDA(
 	const int height,
 	const dim3 grid_size,
 	const int batches_count,
-	int * __restrict__ radii,
+	const int * __restrict__ radii,
 	const float2 * __restrict__ means_2d,
 	const float4 * __restrict__ conic_opacity,
 	const float * __restrict__ depths,
 	float * __restrict__ invdepth,
 	const float * __restrict__ features,
-	float * __restrict__ final_transmittance,
-	uint32_t * __restrict__ n_contrib,
+	float * __restrict__ final_cluster_data,
 	const float * __restrict__ bg_color,
 	float * __restrict__ out_color) {
 	// Phase 0: Set up data.
@@ -313,6 +312,9 @@ skm_renderCUDA(
 	// Profiling markers.
 	const bool is_profile_pixel = pixel_index == 0;
 	unsigned long long fetch_start, cluster_start, render_start;
+
+	if (is_profile_pixel)
+    	printf("Kernel started\n");
 
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
 	// Initialize rendering variables.
@@ -347,6 +349,9 @@ skm_renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_depth[BLOCK_SIZE];
+
+	if (is_profile_pixel)
+    printf("before fetching\n");
 
 
 	// Continue fetching and clustering until all Gaussians have been processed.
@@ -429,6 +434,9 @@ skm_renderCUDA(
 		}
 
 		if (is_profile_pixel)
+    		printf("before clustering\n");
+
+		if (is_profile_pixel)
 			printf("Fetch:\t\t%llu\n", clock64() - fetch_start);
 
 		// Phase 2: Cluster.
@@ -442,8 +450,6 @@ skm_renderCUDA(
 		
 		// Iterate over collected batch.
 		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
-			// FIXME: This follows OG implementation. Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
-			// Mark this Gaussian as a contributor.
 			contributing_gaussians_count++;
 
 			// Compute the alpha.
@@ -552,14 +558,13 @@ skm_renderCUDA(
 		// Continue fetching if there are still Gaussians to process.
 	}
 
+	if (is_profile_pixel)
+    	printf("before compositing\n");
+
 	// Phase 3: Alpha composite the clusters.
 	if (pixel_in_bounds) {
 		if (is_profile_pixel)
 			render_start = clock64();
-
-		// Once all batches are done, compute final transmittance and color for each cluster.
-		final_transmittance[pixel_index] = pixel_transmittance;
-		n_contrib[pixel_index] = last_contributing_count;
 
 		// Compute final transmittance and color.
 		for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
@@ -598,6 +603,24 @@ skm_renderCUDA(
 			const float cluster_g = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)];
 			const float cluster_b = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)];
 
+			assert(target_cluster_index < NUMBER_OF_CLUSTERS);
+			assert(target_cluster_index >= 0);
+			assert(pixel_index < width * height);
+			assert(pixel_index >= 0);
+			if (CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_COLOR_B_INDEX) > 76021760) {
+				printf("Cluster data overflow at pixel %d, cluster %d\n", pixel_index, target_cluster_index);
+				printf("------------------------------------------------");
+			}
+			final_cluster_data[CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_DEPTH_INDEX)] =
+					cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)];
+			final_cluster_data[CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_ALPHA_INDEX)] = 
+					cluster_alpha;
+			final_cluster_data[CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_ALPHA_SUM_INDEX)] =
+					cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)];
+			final_cluster_data[CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_COLOR_R_INDEX)] = cluster_r;
+			final_cluster_data[CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_COLOR_G_INDEX)] = cluster_g;
+			final_cluster_data[CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_COLOR_B_INDEX)] = cluster_b;
+
 			// Do any shortcut exits for compositing.
 
 			// Skip cluster if it's transparent.
@@ -630,6 +653,8 @@ skm_renderCUDA(
 			printf("Contrib vs total: %d / %d\n", last_contributing_count, P);
 		}
 	}
+	if (is_profile_pixel)
+		printf("Kernel finished\n");
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -803,8 +828,7 @@ void FORWARD::skm_render(
 	float *depth,
 	const float *colors_precomp,
 	const float *rgb,
-	float *final_transmittance,
-	uint32_t *n_contrib,
+	float *cluster_data,
 	const float *bg_color,
 	float *out_color) {
 	// Compute number of batches needed to process all Gaussian data.
@@ -823,8 +847,7 @@ void FORWARD::skm_render(
 		depths,
 		depth,
 		features,
-		final_transmittance,
-		n_contrib,
+		cluster_data,
 		bg_color,
 		out_color);
 }

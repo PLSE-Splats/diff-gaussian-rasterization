@@ -18,19 +18,7 @@
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 
-// SKM parameters.
-#define NUMBER_OF_CLUSTERS 12
-// FIXME: Assumes channels is always 3.
-#define NUMBER_OF_DATA_POINTS 7
-#define DEPTH_INDEX 0
-#define SPLAT_COUNT_INDEX 1
-#define ALPHA_SUM_INDEX 2
-#define TRANSMITTANCE_INDEX 3
-#define PREMULTIPLIED_R_INDEX 4
-#define PREMULTIPLIED_G_INDEX 5
-#define PREMULTIPLIED_B_INDEX 6
-#define MINIMUM_TRANSMITTANCE 0.0001f
-#define DATA_AT(INDEX, DATA) (INDEX * NUMBER_OF_DATA_POINTS + DATA)
+
 
 namespace FORWARD
 {
@@ -94,8 +82,7 @@ namespace FORWARD
 		float *depth,
 		const float *colors_precomp,
 		const float *rgb,
-		float *final_transmittance,
-		uint32_t *n_contrib,
+		float *cluster_data,
 		const float *bg_color,
 		float *out_color);
 
