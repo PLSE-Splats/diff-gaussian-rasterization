@@ -28,7 +28,6 @@ setup(
             "ext.cpp"],
             extra_compile_args={
                 "nvcc": [
-                    "-G",  # <-- add this flag for device debug info
                     "-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party/glm/")
                 ]
             })

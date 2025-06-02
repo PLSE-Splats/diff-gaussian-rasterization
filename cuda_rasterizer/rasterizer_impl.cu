@@ -173,6 +173,7 @@ CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, s
 {
 	ImageState img;
 	obtain(chunk, img.cluster_data, N * NUMBER_OF_CLUSTERS * NUMBER_OF_CLUSTER_DATA_POINTS, 128);
+	printf("Size of cluster data %d \n", N * NUMBER_OF_CLUSTERS * NUMBER_OF_CLUSTER_DATA_POINTS);
 	return img;
 }
 

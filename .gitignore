@@ -1,6 +1,7 @@
 build/
 diff_gaussian_rasterization.egg-info/
 dist/
+.vs/
 
 # Created by https://www.toptal.com/developers/gitignore/api/clion,cmake
 # Edit at https://www.toptal.com/developers/gitignore?templates=clion,cmake

@@ -603,11 +603,7 @@ skm_renderCUDA(
 			const float cluster_g = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)];
 			const float cluster_b = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)];
 
-			assert(target_cluster_index < NUMBER_OF_CLUSTERS);
-			assert(target_cluster_index >= 0);
-			assert(pixel_index < width * height);
-			assert(pixel_index >= 0);
-			if (CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_COLOR_B_INDEX) > 76021760) {
+			if (CLUSTER_AT(pixel_index, target_cluster_index, CLUSTER_COLOR_B_INDEX) > 75718656) {
 				printf("Cluster data overflow at pixel %d, cluster %d\n", pixel_index, target_cluster_index);
 				printf("------------------------------------------------");
 			}
