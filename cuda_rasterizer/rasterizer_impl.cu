@@ -220,6 +220,7 @@ int CudaRasterizer::Rasterizer::forward(
 	int* radii,
 	bool debug)
 {
+	printf("Compiler check 01, Forward rendering with P=%d, D=%d, M=%d, width=%d, height=%d\n", P, D, M, width, height);
 	debug = true;
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);

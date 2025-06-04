@@ -617,8 +617,10 @@ renderCUDA(
 		if (is_profile_pixel)
 			cluster_start = clock64();
 		
+		int collection_size = min(BLOCK_SIZE, collection_write_base_index); 
+		
 		// Iterate over collected batch.
-		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
+		for (int sample_index = 0; sample_index < collection_size; ++sample_index) {
 			// Compute the alpha.
 
 			// Resample using conic matrix (cf. "Surface
@@ -649,10 +651,9 @@ renderCUDA(
 			}
 
 			// Collect the color
-			const int global_id = collected_index[sample_index];
-			const float sample_r = features[global_id * NUM_CHANNELS + 0];
-			const float sample_g = features[global_id * NUM_CHANNELS + 1];
-			const float sample_b = features[global_id * NUM_CHANNELS + 2];
+			const float sample_r = features[collected_index[sample_index] * NUM_CHANNELS + 0];
+			const float sample_g = features[collected_index[sample_index] * NUM_CHANNELS + 1];
+			const float sample_b = features[collected_index[sample_index] * NUM_CHANNELS + 2];
 			const float sample_color[NUM_CHANNELS] = {sample_r, sample_g, sample_b};
 
 			float dL_dpixel[C];
@@ -704,7 +705,7 @@ renderCUDA(
 					
 				// Compute the color contribution for each channel.
 				atomicAdd(
-					&dL_dcolors[global_id * NUM_CHANNELS + ch],
+					&dL_dcolors[collected_index[sample_index] * NUM_CHANNELS + ch],
 					dL_dchannel * dchannel_dkcolor * dkcolor_dcolor
 				);
 			}
@@ -726,7 +727,7 @@ renderCUDA(
 			// Update invdepth.
 			if (dL_dinvdepths)
 			{
-				atomicAdd(&(dL_dinvdepths[global_id]), 0.0f);
+				atomicAdd(&(dL_dinvdepths[collected_index[sample_index]]), 0.0f);
 			}
 
 			if (cluster_transmittance > MINIMUM_TRANSMITTANCE) 
@@ -744,16 +745,16 @@ renderCUDA(
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
 			// Update gradients w.r.t. 2D mean position of the Gaussian
-			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+			atomicAdd(&dL_dmean2D[collected_index[sample_index]].x, dL_dG * dG_ddelx * ddelx_dx);
+			atomicAdd(&dL_dmean2D[collected_index[sample_index]].y, dL_dG * dG_ddely * ddely_dy);
 
 			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
-			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
+			atomicAdd(&dL_dconic2D[collected_index[sample_index]].x, -0.5f * gdx * d.x * dL_dG);
+			atomicAdd(&dL_dconic2D[collected_index[sample_index]].y, -0.5f * gdx * d.y * dL_dG);
+			atomicAdd(&dL_dconic2D[collected_index[sample_index]].w, -0.5f * gdy * d.y * dL_dG);
 
 			// Update gradients w.r.t. opacity of the Gaussian
-			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+			atomicAdd(&(dL_dopacity[collected_index[sample_index]]), G * dL_dalpha);
 
 			pixel_transmittance *= 1 - sample_alpha;
 		}

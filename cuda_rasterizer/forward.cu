@@ -319,7 +319,7 @@ skm_renderCUDA(
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
 	// Initialize rendering variables.
 	float pixel_transmittance = 1.0f;
-	float pixel_color[CHANNELS] = {};
+	float pixel_color[NUM_CHANNELS] = {};
 
 	// Clustering data.
 	float cluster_data[NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS] = {};
@@ -448,8 +448,10 @@ skm_renderCUDA(
 		if (is_profile_pixel)
 			cluster_start = clock64();
 		
+		int collection_size = min(BLOCK_SIZE, collection_write_base_index); 
+		
 		// Iterate over collected batch.
-		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
+		for (int sample_index = 0; sample_index < collection_size; ++sample_index) {
 			contributing_gaussians_count++;
 
 			// Compute the alpha.
@@ -481,9 +483,9 @@ skm_renderCUDA(
 			}
 
 			// Collect the color
-			const float sample_r = features[collected_index[sample_index] * CHANNELS + 0];
-			const float sample_g = features[collected_index[sample_index] * CHANNELS + 1];
-			const float sample_b = features[collected_index[sample_index] * CHANNELS + 2];
+			const float sample_r = features[collected_index[sample_index] * NUM_CHANNELS + 0];
+			const float sample_g = features[collected_index[sample_index] * NUM_CHANNELS + 1];
+			const float sample_b = features[collected_index[sample_index] * NUM_CHANNELS + 2];
 
 			// Collect the depth.
 			const float sample_depth = collected_depth[sample_index];
@@ -636,7 +638,7 @@ skm_renderCUDA(
 			transmittance *= 1 - min(1.0f, cluster_alpha);
 		}
 		// Write to output buffer and apply background color.
-		for (int channel = 0; channel < CHANNELS; channel++)
+		for (int channel = 0; channel < NUM_CHANNELS; channel++)
 			out_color[channel * height * width + pixel_index] =
 					pixel_color[channel] + transmittance * bg_color[channel];
 
@@ -700,7 +702,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[CHANNELS] = { 0 };
+	float C[NUM_CHANNELS] = { 0 };
 
 	float expected_invdepth = 0.0f;
 
@@ -753,8 +755,8 @@ renderCUDA(
 			}
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			for (int ch = 0; ch < NUM_CHANNELS; ch++)
+				C[ch] += features[collected_id[j] * NUM_CHANNELS + ch] * alpha * T;
 
 			if(invdepth)
 			expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
@@ -773,7 +775,7 @@ renderCUDA(
 	{
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
+		for (int ch = 0; ch < NUM_CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 
 		if (invdepth)
