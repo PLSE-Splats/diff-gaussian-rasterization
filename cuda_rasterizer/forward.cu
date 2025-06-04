@@ -310,11 +310,8 @@ skm_renderCUDA(
 	bool done = !pixel_in_bounds;
 
 	// Profiling markers.
-	const bool is_profile_pixel = pixel_index == 0;
+	const bool is_profile_pixel = false;
 	unsigned long long fetch_start, cluster_start, render_start;
-
-	if (is_profile_pixel)
-    	printf("Kernel started\n");
 
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
 	// Initialize rendering variables.
@@ -349,10 +346,6 @@ skm_renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_depth[BLOCK_SIZE];
-
-	if (is_profile_pixel)
-    printf("before fetching\n");
-
 
 	// Continue fetching and clustering until all Gaussians have been processed.
 	while (fetch_base_index < P) {
@@ -432,9 +425,6 @@ skm_renderCUDA(
 				fetch_base_index = collected_index[BLOCK_SIZE - 1] + 1;
 			}
 		}
-
-		if (is_profile_pixel)
-    		printf("before clustering\n");
 
 		if (is_profile_pixel)
 			printf("Fetch:\t\t%llu\n", clock64() - fetch_start);
@@ -559,9 +549,6 @@ skm_renderCUDA(
 
 		// Continue fetching if there are still Gaussians to process.
 	}
-
-	if (is_profile_pixel)
-    	printf("before compositing\n");
 
 	// Phase 3: Alpha composite the clusters.
 	if (pixel_in_bounds) {

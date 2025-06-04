@@ -492,7 +492,7 @@ renderCUDA(
 	bool done = !pixel_in_bounds;
 
 	// Profiling markers.
-	const bool is_profile_pixel = pixel_index == 0;
+	const bool is_profile_pixel = false;
 	unsigned long long fetch_start, cluster_start;
 
 	// FIXME: This could be optimized and not declared for out-of-bound pixels.
