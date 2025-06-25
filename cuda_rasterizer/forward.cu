@@ -378,7 +378,7 @@ skm_cluster_passCUDA(
 		collected_depth[thread_rank] = depths[target_gaussian_index];
 	} else {
 		// Otherwise, flag it as invalid by setting the index to -1.
-		collected_index[thread_index] = -1;
+		collected_index[thread_rank] = -1;
 	}
 	
 	// Sync writing.
