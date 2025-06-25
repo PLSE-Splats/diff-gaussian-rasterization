@@ -246,6 +246,10 @@ int CudaRasterizer::Rasterizer::forward(
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
 	}
 
+	// Allocate clustering data buffer.
+	float *d_cluster_data;
+	cudaMalloc(&d_cluster_data, width * height * CLUSTER_DATA_LENGTH * sizeof(float));
+
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -275,25 +279,34 @@ int CudaRasterizer::Rasterizer::forward(
 		antialiasing
 	), debug)
 
-	// One-kernel SKM renderer.
-	CHECK_CUDA(FORWARD::skm_render(
-		           P,
-		           tile_grid,
-		           block,
-		           width,
-		           height,
-		           radii,
-		           geomState.means2D,
-		           geomState.conic_opacity,
-		           geomState.depths,
-		           depth,
-		           colors_precomp,
-		           geomState.rgb,
-		           imgState.accum_alpha,
-		           imgState.n_contrib,
-		           background,
-		           out_color
-	           ), debug);
+	// Clustering passes.
+	for (int start_index = 0; start_index < P; start_index += BLOCK_X * BLOCK_Y) {
+		CHECK_CUDA(FORWARD::skm_cluster_pass(
+			           start_index,
+			           tile_grid,
+			           block,
+			           width,
+			           height,
+			           radii,
+			           geomState.means2D,
+			           geomState.conic_opacity,
+			           geomState.depths,
+			           depth,
+			           colors_precomp,
+			           geomState.rgb,
+			           imgState.accum_alpha,
+			           imgState.n_contrib,
+			           background,
+			           d_cluster_data
+		           ), debug);
+	}
+
+	// Final alpha composite.
+	CHECK_CUDA(FORWARD::cluster_alpha_composite(tile_grid, block, width, height, d_cluster_data, background, out_color),
+	           debug);
+
+	// Free the clustering data buffer.
+	cudaFree(d_cluster_data);
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;

@@ -273,12 +273,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
-skm_renderCUDA(
-	const int P,
+skm_cluster_passCUDA(
+	const int start_index,
 	const int width,
 	const int height,
 	const dim3 grid_size,
-	const int batches_count,
 	int * __restrict__ radii,
 	const float2 * __restrict__ means_2d,
 	const float4 * __restrict__ conic_opacity,
@@ -288,7 +287,7 @@ skm_renderCUDA(
 	float * __restrict__ final_transmittance,
 	uint32_t * __restrict__ n_contrib,
 	const float * __restrict__ bg_color,
-	float * __restrict__ out_color) {
+	float * __restrict__ cluster_data) {
 	// Phase 0: Set up data.
 
 	// Gather thread information.
@@ -346,7 +345,7 @@ skm_renderCUDA(
 
 
 	// Continue fetching and clustering until all Gaussians have been processed.
-	while (fetch_base_index < P) {
+	while (fetch_base_index < start_index) {
 		// Finish rendering if the block is done.
 		if (__syncthreads_count(done) == BLOCK_SIZE)
 			break;
@@ -357,7 +356,7 @@ skm_renderCUDA(
 		int collection_write_base_index = 0;
 
 		// Continue fetching until collection is full or all data is fetched.
-		while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < P) {
+		while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < start_index) {
 			// Initialize fetching variables (we assume the fetched data is invalid).
 			bool valid = false;
 			float2 fetched_xy;
@@ -366,7 +365,7 @@ skm_renderCUDA(
 			const int target_gaussian_index = fetch_base_index + static_cast<int>(thread_rank);
 
 			// If this is a valid Gaussian index, check if it intersects with the tile.
-			if (target_gaussian_index < P) {
+			if (target_gaussian_index < start_index) {
 				// Only do the computation if the gaussian has a radius.
 				int gaussian_radius = radii[target_gaussian_index];
 				if (gaussian_radius > 0) {
@@ -599,13 +598,24 @@ skm_renderCUDA(
 		}
 		// Write to output buffer and apply background color.
 		for (int channel = 0; channel < CHANNELS; channel++)
-			out_color[channel * height * width + pixel_index] =
+			cluster_data[channel * height * width + pixel_index] =
 					pixel_color[channel] + transmittance * bg_color[channel];
 
 		// Write to invdepth buffer.
 		if (invdepth)
 			invdepth[pixel_index] = expected_invdepth;
 	}
+}
+
+template<uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+cluster_alpha_compositeCUDA(
+	const dim3 grid_size,
+	const int width,
+	const int height,
+	const float *cluster_data,
+	const float *bg_color,
+	float *output_color) {
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -766,8 +776,8 @@ void FORWARD::render(
 		depth);
 }
 
-void FORWARD::skm_render(
-	const int P,
+void FORWARD::skm_cluster_pass(
+	const int start_index,
 	const dim3 grid_size,
 	const dim3 block_size,
 	const int width,
@@ -782,17 +792,15 @@ void FORWARD::skm_render(
 	float *final_transmittance,
 	uint32_t *n_contrib,
 	const float *bg_color,
-	float *out_color) {
-	// Compute number of batches needed to process all Gaussian data.
-	const int batches_count = (P + BLOCK_SIZE - 1) / BLOCK_SIZE;
+	float *cluster_data) {
+	// Get the colors for the features.
 	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
 
-	skm_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
-		P,
+	skm_cluster_passCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
+		start_index,
 		width,
 		height,
 		grid_size,
-		batches_count,
 		radii,
 		means_2d,
 		conic_opacity,
@@ -802,7 +810,15 @@ void FORWARD::skm_render(
 		final_transmittance,
 		n_contrib,
 		bg_color,
-		out_color);
+		cluster_data);
+}
+
+void FORWARD::cluster_alpha_composite(dim3 grid_size, dim3 block_size, const int width, const int height,
+                                      const float *cluster_data, const float *bg_color, float *out_color) {
+	cluster_alpha_compositeCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(grid_size, width, height,
+	                                                                      cluster_data,
+	                                                                      bg_color,
+	                                                                      out_color);
 }
 
 

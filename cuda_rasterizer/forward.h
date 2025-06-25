@@ -19,7 +19,7 @@
 #include <glm/glm.hpp>
 
 // SKM parameters.
-#define NUMBER_OF_CLUSTERS 12
+#define NUMBER_OF_CLUSTERS 8
 // FIXME: Assumes channels is always 3.
 #define NUMBER_OF_DATA_POINTS 7
 #define DEPTH_INDEX 0
@@ -30,7 +30,8 @@
 #define PREMULTIPLIED_G_INDEX 5
 #define PREMULTIPLIED_B_INDEX 6
 #define MINIMUM_TRANSMITTANCE 0.0001f
-#define DATA_AT(INDEX, DATA) (INDEX * NUMBER_OF_DATA_POINTS + DATA)
+#define CLUSTER_DATA_LENGTH (NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS)
+#define DATA_AT(PIXEL_INDEX, DATA) (PIXEL_INDEX * CLUSTER_DATA_LENGTH + DATA)
 
 namespace FORWARD
 {
@@ -62,9 +63,11 @@ namespace FORWARD
 		bool prefiltered,
 		bool antialiasing);
 	/**
-	 * One-kernel rasterizer using SKM as the clustering algorithm.
+	 * Cluster gaussians based on depth using Sequential K-Means (SKM) algorithm.
+	 *
+	 * Will process a BLOCK_SIZE number of Gaussians at a time.
 	 * 
-	 * @param P Total number of Gaussian points.
+	 * @param start_index Starting index in the Gaussians to process.
 	 * @param grid_size Number of blocks to launch (number of tiles in the image).
 	 * @param block_size Number of threads per block (size of a tile).
 	 * @param width Image width.
@@ -79,10 +82,10 @@ namespace FORWARD
 	 * @param final_transmittance Array of final transmittance values for each pixel in the image.
 	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
 	 * @param bg_color Background color for the image.
-	 * @param out_color Rendered output color for each pixel in the image.
+	 * @param cluster_data Clustering data for each pixel.
 	 */
-	void skm_render(
-		int P,
+	void skm_cluster_pass(
+		int start_index,
 		dim3 grid_size,
 		dim3 block_size,
 		int width,
@@ -96,6 +99,26 @@ namespace FORWARD
 		const float *rgb,
 		float *final_transmittance,
 		uint32_t *n_contrib,
+		const float *bg_color,
+		float *cluster_data);
+
+	/**
+	 * Compute alpha over composite given the cluster data of a pixel.
+	 * 
+	 * @param grid_size Number of blocks to launch (number of tiles in the image).
+	 * @param block_size Number of threads per block (size of a tile).
+	 * @param width Image width.
+	 * @param height Image height.
+	 * @param cluster_data Cluster data for each pixel.
+	 * @param bg_color Background color for the image.
+	 * @param out_color Final output color for each pixel.
+	 */
+	void cluster_alpha_composite(
+		dim3 grid_size,
+		dim3 block_size,
+		int width,
+		int height,
+		const float *cluster_data,
 		const float *bg_color,
 		float *out_color);
 
