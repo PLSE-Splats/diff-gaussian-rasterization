@@ -297,7 +297,6 @@ int CudaRasterizer::Rasterizer::forward(
 			           geomState.rgb,
 			           imgState.accum_alpha,
 			           imgState.n_contrib,
-			           background,
 			           d_cluster_data
 		           ), debug);
 	}

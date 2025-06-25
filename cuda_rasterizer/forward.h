@@ -84,7 +84,6 @@ namespace FORWARD
 	 * @param rgb Array of RGB values for each pixel in the image.
 	 * @param final_transmittance Array of final transmittance values for each pixel in the image.
 	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
-	 * @param bg_color Background color for the image.
 	 * @param cluster_data Clustering data for each pixel.
 	 */
 	void skm_cluster_pass(
@@ -103,7 +102,7 @@ namespace FORWARD
 		const float *rgb,
 		float *final_transmittance,
 		uint32_t *n_contrib,
-		const float *bg_color, float *cluster_data);
+		float *cluster_data);
 
 	/**
 	 * Compute alpha over composite given the cluster data of a pixel.
