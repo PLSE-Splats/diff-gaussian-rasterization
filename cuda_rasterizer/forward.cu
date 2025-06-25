@@ -275,6 +275,7 @@ template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 skm_cluster_passCUDA(
 	const int start_index,
+	int P,
 	const int width,
 	const int height,
 	const dim3 grid_size,
@@ -286,8 +287,7 @@ skm_cluster_passCUDA(
 	const float * __restrict__ features,
 	float * __restrict__ final_transmittance,
 	uint32_t * __restrict__ n_contrib,
-	const float * __restrict__ bg_color,
-	float * __restrict__ cluster_data) {
+	const float * __restrict__ bg_color, float * __restrict__ cluster_data) {
 	// Phase 0: Set up data.
 
 	// Gather thread information.
@@ -309,19 +309,26 @@ skm_cluster_passCUDA(
 	// Flag for if this pixel is done rendering (automatically is if not visible).
 	bool done = !pixel_in_bounds;
 
-	// FIXME: This could be optimized and not declared for out-of-bound pixels.
-	// Initialize rendering variables.
+	// Initialize pixel clustering data.
+	float pixel_cluster_data[CLUSTER_DATA_LENGTH] = {};
 	float pixel_transmittance = 1.0f;
-	float pixel_color[CHANNELS] = {};
 
-	// Clustering data.
-	float cluster_data[NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS] = {};
-	bool initial_guesses_found = false;
+    if (start_index == 0) {
+        // Initialize transmittance to 1.0 for all clusters.
+        for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+            pixel_cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
+        }
+    } else {
+        // Copy previous cluster data for this pixel from global memory
+        for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+            pixel_cluster_data[i] = cluster_data[CLUSTER_AT(pixel_index) + i];
 
-	// Set transmittance to 1.0 for all clusters.
-	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-		cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
-	}
+        	// Re-accumulate the running pixel_transmittance.
+        	if (i % TRANSMITTANCE_INDEX == 0) {
+        		pixel_transmittance *= pixel_cluster_data[i];
+        	}
+        }
+    }
 
 	// Contribution counters for backwards pass.
 	uint32_t contributing_gaussians_count = 0;
@@ -329,211 +336,171 @@ skm_cluster_passCUDA(
 	float expected_invdepth = 0.0f;
 
 	// Declare shared data structures.
-
-	// Which Gaussian index to start fetching from.
-	int fetch_base_index = 0;
-
-	// BlockScan for compacting data.
-	using BlockScan = cub::BlockScan<int, BLOCK_X, cub::BLOCK_SCAN_RAKING, BLOCK_Y>;
-	__shared__ BlockScan::TempStorage temp_storage;
-
-	// Storage for collected data.
 	__shared__ int collected_index[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_depth[BLOCK_SIZE];
 
 
-	// Continue fetching and clustering until all Gaussians have been processed.
-	while (fetch_base_index < start_index) {
-		// Finish rendering if the block is done.
-		if (__syncthreads_count(done) == BLOCK_SIZE)
-			break;
+	// Phase 1: Fetch data and validate.
 
-		// Phase 1: Fetch and filter Gaussians for this tile.
-		
-		// Where to start putting in fetched data.
-		int collection_write_base_index = 0;
+	// Initialize fetching variables (we assume the fetched data is invalid).
+	bool valid = false;
+	float2 fetched_xy;
 
-		// Continue fetching until collection is full or all data is fetched.
-		while (collection_write_base_index < BLOCK_SIZE && fetch_base_index < start_index) {
-			// Initialize fetching variables (we assume the fetched data is invalid).
-			bool valid = false;
-			float2 fetched_xy;
+	// Get the Gaussian index to fetch.
+	const int target_gaussian_index = start_index + static_cast<int>(thread_rank);
 
-			// Get the Gaussian index to fetch.
-			const int target_gaussian_index = fetch_base_index + static_cast<int>(thread_rank);
+	// If this is a valid Gaussian index, check if it intersects with the tile.
+	if (target_gaussian_index < P) {
+		// Only do the computation if the gaussian has a radius.
+		int gaussian_radius = radii[target_gaussian_index];
+		if (gaussian_radius > 0) {
+			// Compute tile bounds.
+			fetched_xy = means_2d[target_gaussian_index];
+			uint2 bounds_min, bounds_max;
+			getRect(fetched_xy, gaussian_radius, bounds_min, bounds_max, grid_size);
 
-			// If this is a valid Gaussian index, check if it intersects with the tile.
-			if (target_gaussian_index < start_index) {
-				// Only do the computation if the gaussian has a radius.
-				int gaussian_radius = radii[target_gaussian_index];
-				if (gaussian_radius > 0) {
-					// Compute tile bounds.
-					fetched_xy = means_2d[target_gaussian_index];
-					uint2 bounds_min, bounds_max;
-					getRect(fetched_xy, gaussian_radius, bounds_min, bounds_max, grid_size);
-
-					// If the Gaussian intersects the tile, mark it as valid.
-					valid = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-					        group_index.y >= bounds_min.y && group_index.y < bounds_max.y;
-				}
-			}
-
-			// Sync fetching.
-			block.sync();
-
-			// Compute compacted index and offset into collections.
-			int compacted_index;
-			int valid_count = 0;
-			BlockScan(temp_storage).ExclusiveSum(valid, compacted_index, valid_count);
-
-			// Sync compacting.
-			block.sync();
-
-			// If there was any valid data...
-			if (valid_count > 0) {
-				// Write valid data to collections if in bounds.
-				int collection_index = collection_write_base_index + compacted_index;
-				if (valid && collection_index < BLOCK_SIZE) {
-					collected_index[collection_index] = target_gaussian_index;
-					collected_xy[collection_index] = fetched_xy;
-					collected_conic_opacity[collection_index] = conic_opacity[target_gaussian_index];
-					collected_depth[collection_index] = depths[target_gaussian_index];
-				}
-
-				// Sync writing.
-				block.sync();
-
-				// Increment the collection write base index.
-				collection_write_base_index += valid_count;
-			}
-
-
-			// Update fetch base index.
-			if (collection_write_base_index < BLOCK_SIZE) {
-				// If there's still space in the collection, keep fetching.
-				fetch_base_index += BLOCK_SIZE;
-			} else {
-				// Otherwise, prepare fetch index to start after the last added index in the next round.
-				fetch_base_index = collected_index[BLOCK_SIZE - 1] + 1;
-			}
+			// If the Gaussian intersects the tile, mark it as valid.
+			valid = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+			        group_index.y >= bounds_min.y && group_index.y < bounds_max.y;
 		}
+	}
 
-		// Phase 2: Cluster.
+	// Sync fetching and validation.
+	block.sync();
 
-		// Skip if this pixel is done with rendering.
-		if (done)
+	// Write into shared data if the Gaussian is valid.
+	if (valid) {
+		collected_index[thread_rank] = target_gaussian_index;
+		collected_xy[thread_rank] = fetched_xy;
+		collected_conic_opacity[thread_rank] = conic_opacity[target_gaussian_index];
+		collected_depth[thread_rank] = depths[target_gaussian_index];
+	} else {
+		// Otherwise, flag it as invalid by setting the index to -1.
+		collected_index[thread_index] = -1;
+	}
+	
+	// Sync writing.
+	block.sync();
+
+
+	// Phase 2: Cluster.
+
+	// Skip if this pixel is done with rendering.
+	if (done)
+		return;
+
+	// Iterate over collected batch.
+	for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
+		// Skip if this sample is invalid.
+		if (collected_index[sample_index] < 0)
+			continue;
+		
+		// FIXME: This follows OG implementation. Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
+		// Mark this Gaussian as a contributor.
+		contributing_gaussians_count++;
+
+		// Compute the alpha.
+
+		// Resample using conic matrix (cf. "Surface
+		// Splatting" by Zwicker et al., 2001)
+		const float2 sample_coordinate = collected_xy[sample_index];
+		const float2 d = {
+			sample_coordinate.x - static_cast<float>(pixel_coordinate.x),
+			sample_coordinate.y - static_cast<float>(pixel_coordinate.y)
+		};
+		const float4 con_o = collected_conic_opacity[sample_index];
+		const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+		if (power > 0.0f)
 			continue;
 
-		// Iterate over collected batch.
-		for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
-			// FIXME: This follows OG implementation. Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
-			// Mark this Gaussian as a contributor.
-			contributing_gaussians_count++;
+		// Eq. (2) from 3D Gaussian splatting paper.
+		// Obtain alpha by multiplying with Gaussian opacity
+		// and its exponential falloff from mean.
+		// Avoid numerical instabilities (see paper appendix).
+		const float sample_alpha = min(0.99f, con_o.w * exp(power));
+		if (sample_alpha < 1.0f / 255.0f)
+			continue;
 
-			// Compute the alpha.
-
-			// Resample using conic matrix (cf. "Surface
-			// Splatting" by Zwicker et al., 2001)
-			const float2 sample_coordinate = collected_xy[sample_index];
-			const float2 d = {
-				sample_coordinate.x - static_cast<float>(pixel_coordinate.x),
-				sample_coordinate.y - static_cast<float>(pixel_coordinate.y)
-			};
-			const float4 con_o = collected_conic_opacity[sample_index];
-			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
-			if (power > 0.0f)
-				continue;
-
-			// Eq. (2) from 3D Gaussian splatting paper.
-			// Obtain alpha by multiplying with Gaussian opacity
-			// and its exponential falloff from mean.
-			// Avoid numerical instabilities (see paper appendix).
-			const float sample_alpha = min(0.99f, con_o.w * exp(power));
-			if (sample_alpha < 1.0f / 255.0f)
-				continue;
-
-			// End rendering if transmittance is too low.
-			if (pixel_transmittance * (1 - sample_alpha) < 0.0001f) {
-				done = true;
-				continue;
-			}
-
-			// Collect the color
-			const float sample_r = features[collected_index[sample_index] * CHANNELS + 0];
-			const float sample_g = features[collected_index[sample_index] * CHANNELS + 1];
-			const float sample_b = features[collected_index[sample_index] * CHANNELS + 2];
-
-			// Collect the depth.
-			const float sample_depth = collected_depth[sample_index];
-
-			// Do initial cluster guesses or argmin to find cluster.
-			int target_cluster_index = 0;
-
-			if (!initial_guesses_found) {
-				// Loop through each non-zero cluster and check for an exact match.
-				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-					// Use the cluster if it's exactly the same depth.
-					if (cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] == sample_depth) {
-						target_cluster_index = cluster_index;
-						break;
-					}
-
-					// Skip if cluster is not empty.
-					if (cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] != 0.0f)
-						continue;
-
-					// Use the cluster if it's empty.
-					target_cluster_index = cluster_index;
-
-					// If all clusters have been initialized, stop looking.
-					if (cluster_index == NUMBER_OF_CLUSTERS - 1)
-						initial_guesses_found = true;
-
-					// We've found a cluster if we got here, so stop looking.
-					break;
-				}
-			} else {
-				float current_closest_depth_distance = FLT_MAX;
-				// If all clusters are initialized, find the closest cluster.
-				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-					// Replace the target index if it's closer.
-					const float distance_to_cluster = fabsf(
-						cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] - sample_depth);
-					if (distance_to_cluster < current_closest_depth_distance) {
-						current_closest_depth_distance = distance_to_cluster;
-						target_cluster_index = cluster_index;
-					}
-				}
-			}
-
-			// Update cluster information.
-			cluster_data[DATA_AT(target_cluster_index, SPLAT_COUNT_INDEX)]++;
-			cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
-			cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
-			cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha * sample_r;
-			cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha * sample_g;
-			cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha * sample_b;
-
-			// Update cluster mean.
-			const float current_mean = cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)];
-			cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)] = current_mean + (sample_depth - current_mean) /
-			                                                           cluster_data[DATA_AT(
-				                                                           target_cluster_index, SPLAT_COUNT_INDEX)];
-
-			// Update invdepth.
-			if (invdepth)
-				expected_invdepth += 1 / collected_depth[sample_index] * sample_alpha * pixel_transmittance;
-
-			pixel_transmittance *= 1 - sample_alpha;
-
-			// Update last contributing count.
-			last_contributing_count = contributing_gaussians_count;
+		// End rendering if transmittance is too low.
+		if (pixel_transmittance * (1 - sample_alpha) < 0.0001f) {
+			done = true;
+			continue;
 		}
 
-		// Continue fetching if there are still Gaussians to process.
+		// Collect the color
+		const float sample_r = features[collected_index[sample_index] * CHANNELS + 0];
+		const float sample_g = features[collected_index[sample_index] * CHANNELS + 1];
+		const float sample_b = features[collected_index[sample_index] * CHANNELS + 2];
+
+		// Collect the depth.
+		const float sample_depth = collected_depth[sample_index];
+
+		// Do initial cluster guesses or argmin to find cluster.
+		int target_cluster_index = 0;
+
+		// Pick cluster to use. Initialize empty ones or find the argmin.
+		if (pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX] < NUMBER_OF_CLUSTERS) {
+			// Start with the next open cluster index.
+			target_cluster_index = pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX];
+			
+			// Check initialized clusters for an exact match.
+			for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index) {
+				// Use it if found.
+				if (pixel_cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] == sample_depth) {
+					target_cluster_index = cluster_index;
+					break;
+				}
+
+				// If we didn't find a match, increment the uninitialized cluster index for next time.
+				if (cluster_index == target_cluster_index - 1) {
+					pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]++;
+				}
+			}
+		} else {
+			float current_closest_depth_distance = FLT_MAX;
+			// If all clusters are initialized, find the closest cluster.
+			for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+				// Replace the target index if it's closer.
+				const float distance_to_cluster = fabsf(
+					pixel_cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] - sample_depth);
+				if (distance_to_cluster < current_closest_depth_distance) {
+					current_closest_depth_distance = distance_to_cluster;
+					target_cluster_index = cluster_index;
+				}
+			}
+		}
+
+		// Update cluster information.
+		pixel_cluster_data[DATA_AT(target_cluster_index, SPLAT_COUNT_INDEX)]++;
+		pixel_cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
+		pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
+		pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha * sample_r;
+		pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha * sample_g;
+		pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha * sample_b;
+
+		// Update cluster mean.
+		const float current_mean = pixel_cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)];
+		pixel_cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)] = current_mean + (sample_depth - current_mean) /
+		                                                           pixel_cluster_data[DATA_AT(
+			                                                           target_cluster_index, SPLAT_COUNT_INDEX)];
+
+		// Update invdepth.
+		if (invdepth)
+			expected_invdepth += 1 / collected_depth[sample_index] * sample_alpha * pixel_transmittance;
+
+		pixel_transmittance *= 1 - sample_alpha;
+
+		// Update last contributing count.
+		last_contributing_count = contributing_gaussians_count;
 	}
+
+	// Write the pixel cluster data to the global memory.
+    for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+        cluster_data[CLUSTER_AT(pixel_index) + i] = pixel_cluster_data[i];
+    }
+
 
 	// Phase 3: Alpha composite the clusters.
 	if (pixel_in_bounds) {
@@ -616,6 +583,30 @@ cluster_alpha_compositeCUDA(
 	const float *cluster_data,
 	const float *bg_color,
 	float *output_color) {
+	// Phase 0: Set up data.
+
+	// Gather thread information.
+	auto block = cg::this_thread_block();
+	const auto group_index = block.group_index();
+	const auto thread_index = block.thread_index();
+	const auto thread_rank = block.thread_rank();
+
+	// Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+	// Compute if this thread is associated with a visible pixel.
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+	// Flag for if this pixel is done rendering (automatically is if not visible).
+	bool done = !pixel_in_bounds;
+
+	// Initialize rendering variables.
+	float pixel_transmittance = 1.0f;
+	float pixel_color[CHANNELS] = {};
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -778,6 +769,7 @@ void FORWARD::render(
 
 void FORWARD::skm_cluster_pass(
 	const int start_index,
+	const int P,
 	const dim3 grid_size,
 	const dim3 block_size,
 	const int width,
@@ -791,13 +783,13 @@ void FORWARD::skm_cluster_pass(
 	const float *rgb,
 	float *final_transmittance,
 	uint32_t *n_contrib,
-	const float *bg_color,
-	float *cluster_data) {
+	const float *bg_color, float *cluster_data) {
 	// Get the colors for the features.
 	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
 
 	skm_cluster_passCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
 		start_index,
+		P,
 		width,
 		height,
 		grid_size,
@@ -809,8 +801,7 @@ void FORWARD::skm_cluster_pass(
 		features,
 		final_transmittance,
 		n_contrib,
-		bg_color,
-		cluster_data);
+		bg_color, cluster_data);
 }
 
 void FORWARD::cluster_alpha_composite(dim3 grid_size, dim3 block_size, const int width, const int height,

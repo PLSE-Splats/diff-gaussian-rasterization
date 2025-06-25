@@ -283,6 +283,7 @@ int CudaRasterizer::Rasterizer::forward(
 	for (int start_index = 0; start_index < P; start_index += BLOCK_X * BLOCK_Y) {
 		CHECK_CUDA(FORWARD::skm_cluster_pass(
 			           start_index,
+			           P,
 			           tile_grid,
 			           block,
 			           width,

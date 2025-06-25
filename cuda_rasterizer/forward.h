@@ -29,9 +29,11 @@
 #define PREMULTIPLIED_R_INDEX 4
 #define PREMULTIPLIED_G_INDEX 5
 #define PREMULTIPLIED_B_INDEX 6
+#define UNINITIALIZED_CLUSTER_INDEX_INDEX NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS
+#define CLUSTER_DATA_LENGTH (NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS + 1) // +1 for uninitialized cluster index.
+#define CLUSTER_AT(PIXEL_INDEX) PIXEL_INDEX * CLUSTER_DATA_LENGTH
+#define DATA_AT(CLUSTER_INDEX, DATA) (CLUSTER_INDEX * NUMBER_OF_CLUSTERS + DATA)
 #define MINIMUM_TRANSMITTANCE 0.0001f
-#define CLUSTER_DATA_LENGTH (NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS)
-#define DATA_AT(PIXEL_INDEX, DATA) (PIXEL_INDEX * CLUSTER_DATA_LENGTH + DATA)
 
 namespace FORWARD
 {
@@ -68,6 +70,7 @@ namespace FORWARD
 	 * Will process a BLOCK_SIZE number of Gaussians at a time.
 	 * 
 	 * @param start_index Starting index in the Gaussians to process.
+	 * @param P Total number of Gaussians.
 	 * @param grid_size Number of blocks to launch (number of tiles in the image).
 	 * @param block_size Number of threads per block (size of a tile).
 	 * @param width Image width.
@@ -86,6 +89,7 @@ namespace FORWARD
 	 */
 	void skm_cluster_pass(
 		int start_index,
+		int P,
 		dim3 grid_size,
 		dim3 block_size,
 		int width,
@@ -99,8 +103,7 @@ namespace FORWARD
 		const float *rgb,
 		float *final_transmittance,
 		uint32_t *n_contrib,
-		const float *bg_color,
-		float *cluster_data);
+		const float *bg_color, float *cluster_data);
 
 	/**
 	 * Compute alpha over composite given the cluster data of a pixel.
