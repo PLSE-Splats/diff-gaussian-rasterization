@@ -322,13 +322,22 @@ skm_cluster_passCUDA(
         // Copy previous cluster data for this pixel from global memory
         for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
             pixel_cluster_data[i] = cluster_data[CLUSTER_AT(pixel_index) + i];
-
-        	// Re-accumulate the running pixel_transmittance.
-        	if (i % TRANSMITTANCE_INDEX == 0) {
-        		pixel_transmittance *= pixel_cluster_data[i];
-        	}
         }
-    }
+    	
+		// Re-accumulate the running pixel transmittance.
+        for (int i = 0; i < NUMBER_OF_CLUSTERS; ++i) {
+	        pixel_transmittance *= pixel_cluster_data[DATA_AT(i, TRANSMITTANCE_INDEX)];
+        }
+	}
+
+	// if (pixel_index == 0) {
+	// 	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+	// 		printf("%.2f", pixel_cluster_data[i]);
+	// 		if ((i + 1) % NUMBER_OF_DATA_POINTS == 0) printf(" | ");
+	// 		else if (i < CLUSTER_DATA_LENGTH - 1) printf(", ");
+	// 	}
+	// 	printf("\n");
+	// }
 
 	// Contribution counters for backwards pass.
 	uint32_t contributing_gaussians_count = 0;
@@ -388,11 +397,17 @@ skm_cluster_passCUDA(
 		return;
 
 	// Iterate over collected batch.
+	if (pixel_index == 0)
+		printf("%d: ", start_index);
 	for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
 		// Skip if this sample is invalid.
 		if (collected_index[sample_index] < 0)
 			continue;
-		
+
+		if (pixel_index == 0) {
+			printf("%d, ", sample_index);
+		}
+
 		// FIXME: This follows OG implementation. Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
 		// Mark this Gaussian as a contributor.
 		contributing_gaussians_count++;
@@ -491,6 +506,8 @@ skm_cluster_passCUDA(
 		// Update last contributing count.
 		last_contributing_count = contributing_gaussians_count;
 	}
+	if (pixel_index == 0)
+		printf("\n");
 
 	// Update backwards pass data.
 	final_transmittance[pixel_index] *= pixel_transmittance;
@@ -500,8 +517,15 @@ skm_cluster_passCUDA(
 
 	// Write the pixel cluster data to the global memory.
     for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
-        cluster_data[CLUSTER_AT(pixel_index) + i] = pixel_cluster_data[i];
-    }
+		if (pixel_index == 0) {
+			printf("%.2f", pixel_cluster_data[i]);
+			if ((i + 1) % NUMBER_OF_DATA_POINTS == 0) printf(" | ");
+			else if (i < CLUSTER_DATA_LENGTH - 1) printf(", ");
+		}
+		cluster_data[CLUSTER_AT(pixel_index) + i] = pixel_cluster_data[i];
+	}
+	if (pixel_index == 0)
+		printf("\n");
 }
 
 template<uint32_t CHANNELS>
