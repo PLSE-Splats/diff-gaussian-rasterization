@@ -19,7 +19,7 @@
 #include <glm/glm.hpp>
 
 // SKM parameters.
-#define NUMBER_OF_CLUSTERS 4
+#define NUMBER_OF_CLUSTERS 8
 // FIXME: Assumes channels is always 3.
 #define NUMBER_OF_DATA_POINTS 7
 #define DEPTH_INDEX 0
