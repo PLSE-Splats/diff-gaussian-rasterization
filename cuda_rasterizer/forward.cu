@@ -301,7 +301,7 @@ skm_cluster_passCUDA(
 	const uint2 pixel_coordinate = {
 		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
 	};
-	uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
 
 	// Compute if this thread is associated with a visible pixel.
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
@@ -366,9 +366,6 @@ skm_cluster_passCUDA(
 			        group_index.y >= bounds_min.y && group_index.y < bounds_max.y;
 		}
 	}
-
-	// Sync fetching and validation.
-	block.sync();
 
 	// Write into shared data if the Gaussian is valid.
 	if (valid) {
@@ -442,8 +439,8 @@ skm_cluster_passCUDA(
 		// Pick cluster to use. Initialize empty ones or find the argmin.
 		if (pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX] < NUMBER_OF_CLUSTERS) {
 			// Start with the next open cluster index.
-			target_cluster_index = pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX];
-			
+			target_cluster_index = static_cast<int>(pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]);
+
 			// Check initialized clusters for an exact match.
 			for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index) {
 				// Use it if found.
@@ -528,7 +525,7 @@ cluster_alpha_compositeCUDA(
 	const uint2 pixel_coordinate = {
 		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
 	};
-	uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
 
 	// Compute if this thread is associated with a visible pixel.
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
@@ -547,24 +544,8 @@ cluster_alpha_compositeCUDA(
 	float pixel_color[CHANNELS] = {};
 
 	// Copy the cluster data for this pixel from global memory and finalize transmittance and color.
-	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-		pixel_cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] = cluster_data[
-			CLUSTER_AT(pixel_index) + DATA_AT(cluster_index, DEPTH_INDEX)];
-		pixel_cluster_data[DATA_AT(cluster_index, SPLAT_COUNT_INDEX)] = cluster_data[
-			CLUSTER_AT(pixel_index) + DATA_AT(cluster_index, SPLAT_COUNT_INDEX)];
-		pixel_cluster_data[DATA_AT(cluster_index, ALPHA_SUM_INDEX)] = cluster_data[
-			CLUSTER_AT(pixel_index) + DATA_AT(cluster_index, ALPHA_SUM_INDEX)];
-		pixel_cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] =
-				1 - cluster_data[CLUSTER_AT(pixel_index) + DATA_AT(cluster_index, TRANSMITTANCE_INDEX)];
-		pixel_cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_R_INDEX)] =
-				cluster_data[CLUSTER_AT(pixel_index) + DATA_AT(cluster_index, PREMULTIPLIED_R_INDEX)] /
-				pixel_cluster_data[DATA_AT(cluster_index, ALPHA_SUM_INDEX)];
-		pixel_cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_G_INDEX)] =
-				cluster_data[CLUSTER_AT(pixel_index) + DATA_AT(cluster_index, PREMULTIPLIED_G_INDEX)] /
-				pixel_cluster_data[DATA_AT(cluster_index, ALPHA_SUM_INDEX)];
-		pixel_cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_B_INDEX)] =
-				cluster_data[CLUSTER_AT(pixel_index) + DATA_AT(cluster_index, PREMULTIPLIED_B_INDEX)] /
-				pixel_cluster_data[DATA_AT(cluster_index, ALPHA_SUM_INDEX)];
+	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+		pixel_cluster_data[i] = cluster_data[CLUSTER_AT(pixel_index) + i];
 	}
 
 
@@ -580,25 +561,29 @@ cluster_alpha_compositeCUDA(
 				target_cluster_index = cluster_index_j;
 			}
 		}
-
-		// Found the next cluster to process. Update last minimum depth.
-		last_minimum_depth = current_minimum_depth;
-
-		// Get cluster data.
-		const float cluster_alpha = pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)];
-		const float cluster_r = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)];
-		const float cluster_g = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)];
-		const float cluster_b = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)];
-
+		
 		// Do any shortcut exits for compositing.
 
 		// Skip cluster if it's transparent.
-		if (pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] == 0.0f)
+		if (pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] == 1.0f)
 			continue;
 
 		// Exit once the transmittance is at the minimum.
 		if (transmittance <= MINIMUM_TRANSMITTANCE)
 			break;
+
+		// Found the next cluster to process. Update last minimum depth.
+		last_minimum_depth = current_minimum_depth;
+
+		// Get cluster data.
+		const float cluster_alpha = 1 - pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)];
+		const float cluster_alpha_sum = pixel_cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)];
+		const float cluster_r = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)] /
+		                        cluster_alpha_sum;
+		const float cluster_g = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)] /
+		                        cluster_alpha_sum;
+		const float cluster_b = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)] /
+		                        cluster_alpha_sum;
 
 		// Contribute the cluster to the final output color.
 		pixel_color[0] += cluster_alpha * cluster_r * transmittance;
