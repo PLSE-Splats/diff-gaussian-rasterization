@@ -110,6 +110,34 @@ __global__ void duplicateWithKeys(
 	}
 }
 
+/**
+ * Fill in Gaussian indices each tile will have to process.
+ *
+ * @param tile_offsets - Offset for the start of teach tile in the list of tile-Gaussian indices.
+ * @param tile_write_offsets - Offset into the tile-Gaussian indices list for each tile, where the next Gaussian index will be written.
+ * @param tile_gaussian_indices - Output list of Gaussian indices for each tile.
+ */
+__global__ void fillGaussianIndicesPerTile(int P, const float2 *means2D, const int *radii, const int *tile_offsets,
+                                           int *tile_write_offsets, int *tile_gaussian_indices, dim3 grid) {
+	// Get this Gaussian's index (thread ID).
+	const auto idx = cg::this_grid().thread_rank();
+	if (idx >= P || radii[idx] <= 0)
+		return;
+
+	// Compute tile intersection.
+	uint2 rect_min, rect_max;
+	getRect(means2D[idx], radii[idx], rect_min, rect_max, grid);
+
+	// Add this Gaussian to all tiles that it overlaps.
+	for (int y = rect_min.y; y < rect_max.y; y++) {
+		for (int x = rect_min.x; x < rect_max.x; x++) {
+			const uint32_t tile_id = y * grid.x + x;
+			const uint32_t off = tile_offsets[tile_id] + atomicAdd(&tile_write_offsets[tile_id], 1);
+			tile_gaussian_indices[off] = idx;
+		}
+	}
+}
+
 // Check keys to see if it is at the start/end of one tile's range in 
 // the full sorted list. If yes, write start/end of this tile. 
 // Run once per instanced (duplicated) Gaussian ID.
@@ -287,22 +315,29 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
 
 	// Compute prefix sum over Gaussians per tile counts, to compute offsets for tile lists.
-	int *gaussians_per_tile_offsets = nullptr;
+	int *d_gaussians_per_tile_offsets = nullptr;
 	void *gaussians_per_tile_scan_temp = nullptr;
 	size_t gaussians_per_tile_scan_size = 0;
 	// Get temp storage size for prefix sum
 	CHECK_CUDA(
 		cub::DeviceScan::InclusiveSum(nullptr, gaussians_per_tile_scan_size, gaussians_per_tile_count,
-			gaussians_per_tile_offsets, num_tiles), debug);
+			d_gaussians_per_tile_offsets, num_tiles), debug);
 	CHECK_CUDA(cudaMalloc(&gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size), debug);
-	CHECK_CUDA(cudaMalloc(&gaussians_per_tile_offsets, num_tiles * sizeof(int)), debug);
+	CHECK_CUDA(cudaMalloc(&d_gaussians_per_tile_offsets, num_tiles * sizeof(int)), debug);
 	CHECK_CUDA(
 		cub::DeviceScan::InclusiveSum(gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size,
-			gaussians_per_tile_count, gaussians_per_tile_offsets, num_tiles), debug)
+			gaussians_per_tile_count, d_gaussians_per_tile_offsets, num_tiles), debug)
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
 	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
+
+	// Get total number of Gaussians in each tile.
+	int num_gaussians_for_each_tile = 0;
+	CHECK_CUDA(
+		cudaMemcpy(&num_gaussians_for_each_tile, d_gaussians_per_tile_offsets + num_tiles - 1, sizeof(int),
+			cudaMemcpyDeviceToHost), debug);
+	printf("Total num gaussians for each tile: %d\n", num_gaussians_for_each_tile);
 
 	size_t binning_chunk_size = required<BinningState>(num_rendered);
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
@@ -320,6 +355,18 @@ int CudaRasterizer::Rasterizer::forward(
 		radii,
 		tile_grid)
 	CHECK_CUDA(, debug)
+
+	// Write the Gaussian indices each tile will have to process.
+	int *d_gaussian_indices_for_each_tile = nullptr;
+	int *d_gaussians_indices_for_each_tile_write_offsets = nullptr;
+	CHECK_CUDA(cudaMalloc(&d_gaussian_indices_for_each_tile, num_gaussians_for_each_tile * sizeof(int)), debug);
+	CHECK_CUDA(cudaMalloc(&d_gaussians_indices_for_each_tile_write_offsets, num_tiles * sizeof(int)), debug);
+	printf("Before filling\n");
+	fillGaussianIndicesPerTile<<<(P + 255) / 256, 256 >>>(
+		P, geomState.means2D, radii, d_gaussians_per_tile_offsets, d_gaussians_indices_for_each_tile_write_offsets,
+		d_gaussian_indices_for_each_tile, tile_grid);
+	printf("After filling\n");
+
 
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
 
