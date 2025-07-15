@@ -45,9 +45,49 @@ namespace FORWARD
 		float4* conic_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
-		int* gaussians_per_tile_count,
+		uint32_t *gaussians_per_tile_count,
 		bool prefiltered,
 		bool antialiasing);
+
+	/**
+	 * Cluster gaussians based on depth using Sequential K-Means (SKM) algorithm.
+	 *
+	 * Iteratively pulls BLOCK_SIZE Gaussians from the global memory and processes them in parallel.
+	 *
+	 * @param grid_size Number of blocks to launch (number of tiles in the image).
+	 * @param block_size Number of threads per block (size of a tile).
+	 * @param gaussians_per_tile_offsets Array of offsets for each tile where the i'th index is the start for i+1'th tile.
+	 * @param gaussian_indices_for_each_tile Array of Gaussian indices each tile is responsible for.
+	 * @param width Image width.
+	 * @param height Image height.
+	 * @param radii Array of radii for each Gaussian.
+	 * @param means_2d Array of 2D coordinates of each Gaussian.
+	 * @param conic_opacity Array of conic opacity values for each Gaussian.
+	 * @param depths Array of depth values for each Gaussian.
+	 * @param depth Array of depth values for each pixel in the image.
+	 * @param colors_precomp Array of precomputed colors for each Gaussian.
+	 * @param rgb Array of RGB values for each pixel in the image.
+	 * @param final_transmittance Array of final transmittance values for each pixel in the image.
+	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
+	 * @param cluster_data Clustering data for each pixel.
+	 */
+	void skm_cluster(
+		dim3 grid_size,
+		dim3 block_size,
+		const uint32_t *gaussians_per_tile_offsets,
+		const uint32_t *gaussian_indices_for_each_tile,
+		int width,
+		int height,
+		int *radii,
+		const float2 *means_2d,
+		const float4 *conic_opacity,
+		const float *depths,
+		float *depth,
+		const float *colors_precomp,
+		const float *rgb,
+		float *final_transmittance,
+		uint32_t *n_contrib,
+		float *cluster_data);
 
 	// Main rasterization method.
 	void render(

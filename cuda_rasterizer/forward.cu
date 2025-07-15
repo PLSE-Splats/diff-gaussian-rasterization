@@ -173,7 +173,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	int *gaussians_per_tile_count,
+	uint32_t *gaussians_per_tile_count,
 	bool prefiltered,
 	bool antialiasing)
 {
@@ -458,7 +458,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	int *gaussians_per_tile_count,
+	uint32_t *gaussians_per_tile_count,
 	bool prefiltered,
 	bool antialiasing)
 {

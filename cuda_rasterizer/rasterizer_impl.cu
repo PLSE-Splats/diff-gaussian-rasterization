@@ -117,8 +117,8 @@ __global__ void duplicateWithKeys(
  * @param tile_write_offsets - Offset into the tile-Gaussian indices list for each tile, where the next Gaussian index will be written.
  * @param tile_gaussian_indices - Output list of Gaussian indices for each tile.
  */
-__global__ void fillGaussianIndicesPerTile(int P, const float2 *means2D, const int *radii, const int *tile_offsets,
-                                           int *tile_write_offsets, int *tile_gaussian_indices, dim3 grid) {
+__global__ void fillGaussianIndicesPerTile(int P, const float2 *means2D, const int *radii, const uint32_t *tile_offsets,
+                                           uint32_t *tile_write_offsets, uint32_t *tile_gaussian_indices, dim3 grid) {
 	// Get this Gaussian's index (thread ID).
 	const auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || radii[idx] <= 0)
@@ -264,11 +264,11 @@ int CudaRasterizer::Rasterizer::forward(
 	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	dim3 block(BLOCK_X, BLOCK_Y, 1);
 
-	// Allocate device memory to store Guassians per tile counts.
-	int num_tiles = tile_grid.x * tile_grid.y;
-	int *gaussians_per_tile_count = nullptr;
-	CHECK_CUDA(cudaMalloc(&gaussians_per_tile_count, num_tiles * sizeof(int)), debug);
-	CHECK_CUDA(cudaMemset(gaussians_per_tile_count, 0, num_tiles * sizeof(int)), debug);
+	// Allocate device memory to store Guassians per tile counts. List is of size num_tiles.
+	uint32_t num_tiles = tile_grid.x * tile_grid.y;
+	uint32_t *d_gaussians_per_tile_count = nullptr;
+	CHECK_CUDA(cudaMalloc(&d_gaussians_per_tile_count, num_tiles * sizeof(uint32_t)), debug);
+	CHECK_CUDA(cudaMemset(d_gaussians_per_tile_count, 0, num_tiles * sizeof(uint32_t)), debug);
 
 	// Dynamically resize image-based auxiliary buffers during training
 	size_t img_chunk_size = required<ImageState>(width * height);
@@ -305,7 +305,7 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.conic_opacity,
 		tile_grid,
 		geomState.tiles_touched,
-		gaussians_per_tile_count,
+		d_gaussians_per_tile_count,
 		prefiltered,
 		antialiasing
 	), debug)
@@ -314,28 +314,28 @@ int CudaRasterizer::Rasterizer::forward(
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
 	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
 
-	// Compute prefix sum over Gaussians per tile counts, to compute offsets for tile lists.
-	int *d_gaussians_per_tile_offsets = nullptr;
-	void *gaussians_per_tile_scan_temp = nullptr;
+	// Compute prefix sum over Gaussians per tile counts, to compute offsets for tile lists. List is of size num_tiles.
+	uint32_t *d_gaussians_per_tile_offsets = nullptr;
+	uint32_t *d_gaussians_per_tile_scan_temp = nullptr;
 	size_t gaussians_per_tile_scan_size = 0;
 	// Get temp storage size for prefix sum
 	CHECK_CUDA(
-		cub::DeviceScan::InclusiveSum(nullptr, gaussians_per_tile_scan_size, gaussians_per_tile_count,
+		cub::DeviceScan::InclusiveSum(nullptr, gaussians_per_tile_scan_size, d_gaussians_per_tile_count,
 			d_gaussians_per_tile_offsets, num_tiles), debug);
-	CHECK_CUDA(cudaMalloc(&gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size), debug);
-	CHECK_CUDA(cudaMalloc(&d_gaussians_per_tile_offsets, num_tiles * sizeof(int)), debug);
+	CHECK_CUDA(cudaMalloc(&d_gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size), debug);
+	CHECK_CUDA(cudaMalloc(&d_gaussians_per_tile_offsets, num_tiles * sizeof(uint32_t)), debug);
 	CHECK_CUDA(
-		cub::DeviceScan::InclusiveSum(gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size,
-			gaussians_per_tile_count, d_gaussians_per_tile_offsets, num_tiles), debug)
+		cub::DeviceScan::InclusiveSum(d_gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size,
+			d_gaussians_per_tile_count, d_gaussians_per_tile_offsets, num_tiles), debug)
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
 	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
 
 	// Get total number of Gaussians in each tile.
-	int num_gaussians_for_each_tile = 0;
+	uint32_t num_gaussians_for_each_tile = 0;
 	CHECK_CUDA(
-		cudaMemcpy(&num_gaussians_for_each_tile, d_gaussians_per_tile_offsets + num_tiles - 1, sizeof(int),
+		cudaMemcpy(&num_gaussians_for_each_tile, d_gaussians_per_tile_offsets + num_tiles - 1, sizeof(uint32_t),
 			cudaMemcpyDeviceToHost), debug);
 	printf("Total num gaussians for each tile: %d\n", num_gaussians_for_each_tile);
 
@@ -356,17 +356,14 @@ int CudaRasterizer::Rasterizer::forward(
 		tile_grid)
 	CHECK_CUDA(, debug)
 
-	// Write the Gaussian indices each tile will have to process.
-	int *d_gaussian_indices_for_each_tile = nullptr;
-	int *d_gaussians_indices_for_each_tile_write_offsets = nullptr;
-	CHECK_CUDA(cudaMalloc(&d_gaussian_indices_for_each_tile, num_gaussians_for_each_tile * sizeof(int)), debug);
-	CHECK_CUDA(cudaMalloc(&d_gaussians_indices_for_each_tile_write_offsets, num_tiles * sizeof(int)), debug);
-	printf("Before filling\n");
+	// Write the Gaussian indices each tile will have to process. List of size num_gaussians_for_each_tile.
+	uint32_t *d_gaussian_indices_for_each_tile = nullptr;
+	uint32_t *d_gaussians_indices_for_each_tile_write_offsets = nullptr;
+	CHECK_CUDA(cudaMalloc(&d_gaussian_indices_for_each_tile, num_gaussians_for_each_tile * sizeof(uint32_t)), debug);
+	CHECK_CUDA(cudaMalloc(&d_gaussians_indices_for_each_tile_write_offsets, num_tiles * sizeof(uint32_t)), debug);
 	fillGaussianIndicesPerTile<<<(P + 255) / 256, 256 >>>(
 		P, geomState.means2D, radii, d_gaussians_per_tile_offsets, d_gaussians_indices_for_each_tile_write_offsets,
 		d_gaussian_indices_for_each_tile, tile_grid);
-	printf("After filling\n");
-
 
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
 
@@ -404,6 +401,13 @@ int CudaRasterizer::Rasterizer::forward(
 		out_color,
 		geomState.depths,
 		depth), debug)
+
+	// Cleanup structures.
+	CHECK_CUDA(cudaFree(d_gaussians_per_tile_count), debug);
+	CHECK_CUDA(cudaFree(d_gaussians_per_tile_scan_temp), debug);
+	CHECK_CUDA(cudaFree(d_gaussians_per_tile_offsets), debug);
+	CHECK_CUDA(cudaFree(d_gaussian_indices_for_each_tile), debug);
+	CHECK_CUDA(cudaFree(d_gaussians_indices_for_each_tile_write_offsets), debug);
 
 	return num_rendered;
 }
