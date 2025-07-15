@@ -236,6 +236,12 @@ int CudaRasterizer::Rasterizer::forward(
 	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	dim3 block(BLOCK_X, BLOCK_Y, 1);
 
+	// Allocate device memory to store Guassians per tile counts.
+	int num_tiles = tile_grid.x * tile_grid.y;
+	int *gaussians_per_tile_count = nullptr;
+	CHECK_CUDA(cudaMalloc(&gaussians_per_tile_count, num_tiles * sizeof(int)), debug);
+	CHECK_CUDA(cudaMemset(gaussians_per_tile_count, 0, num_tiles * sizeof(int)), debug);
+
 	// Dynamically resize image-based auxiliary buffers during training
 	size_t img_chunk_size = required<ImageState>(width * height);
 	char* img_chunkptr = imageBuffer(img_chunk_size);
@@ -271,6 +277,7 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.conic_opacity,
 		tile_grid,
 		geomState.tiles_touched,
+		gaussians_per_tile_count,
 		prefiltered,
 		antialiasing
 	), debug)
@@ -278,6 +285,20 @@ int CudaRasterizer::Rasterizer::forward(
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
 	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
+
+	// Compute prefix sum over Gaussians per tile counts, to compute offsets for tile lists.
+	int *gaussians_per_tile_offsets = nullptr;
+	void *gaussians_per_tile_scan_temp = nullptr;
+	size_t gaussians_per_tile_scan_size = 0;
+	// Get temp storage size for prefix sum
+	CHECK_CUDA(
+		cub::DeviceScan::InclusiveSum(nullptr, gaussians_per_tile_scan_size, gaussians_per_tile_count,
+			gaussians_per_tile_offsets, num_tiles), debug);
+	CHECK_CUDA(cudaMalloc(&gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size), debug);
+	CHECK_CUDA(cudaMalloc(&gaussians_per_tile_offsets, num_tiles * sizeof(int)), debug);
+	CHECK_CUDA(
+		cub::DeviceScan::InclusiveSum(gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size,
+			gaussians_per_tile_count, gaussians_per_tile_offsets, num_tiles), debug)
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;

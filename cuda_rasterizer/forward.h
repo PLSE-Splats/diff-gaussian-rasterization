@@ -45,6 +45,7 @@ namespace FORWARD
 		float4* conic_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
+		int* gaussians_per_tile_count,
 		bool prefiltered,
 		bool antialiasing);
 
