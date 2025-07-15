@@ -276,6 +276,59 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	}
 }
 
+template<uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+skm_clusterCUDA(int width, int height, const uint32_t *gaussians_per_tile_offsets, const uint32_t *gaussian_indices_for_each_tile) {
+	// Setup data.
+
+	// Gather thread information.
+	auto block = cg::this_thread_block();
+	const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
+	const auto group_index = block.group_index();
+	const uint32_t tile_index = group_index.y * horizontal_blocks + group_index.x;
+	const auto thread_index = block.thread_index();
+	const auto thread_rank = block.thread_rank();
+
+	// Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+	// Compute if this thread is associated with a visible pixel.
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+	// Flag for if this pixel is done rendering (automatically is if not visible).
+	bool done = !pixel_in_bounds;
+
+	// Initialize pixel clustering data.
+	float pixel_cluster_data[CLUSTER_DATA_LENGTH] = {};
+	float pixel_transmittance = 1.0f;
+
+	// Initialize transmittance to 1.0 for all clusters.
+	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+		pixel_cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
+	}
+
+	// Contribution counters for backwards pass.
+	uint32_t contributing_gaussians_count = 0;
+	uint32_t last_contributing_count = 0;
+	float expected_invdepth = 0.0f;
+
+	// Compute iterations needed for this tile.
+	const int upper_offset = gaussians_per_tile_offsets[tile_index];
+	const int lower_offset = tile_index == 0 ? 0 : gaussians_per_tile_offsets[tile_index - 1];
+	const int rounds = ((upper_offset - lower_offset + BLOCK_SIZE - 1) / BLOCK_SIZE);
+	int toDo = upper_offset - lower_offset;
+
+	// Declare shared data structures.
+	__shared__ int collected_index[BLOCK_SIZE];
+	__shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	__shared__ float collected_depth[BLOCK_SIZE];
+}
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -403,6 +456,15 @@ renderCUDA(
 		invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
 	}
 }
+
+void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const uint32_t *gaussians_per_tile_offsets,
+                          const uint32_t *gaussian_indices_for_each_tile, int width, int height, int *radii,
+                          const float2 *means_2d, const float4 *conic_opacity, const float *depths, float *depth,
+                          const float *colors_precomp, const float *rgb, float *final_transmittance,
+                          uint32_t *n_contrib, float *cluster_data) {
+	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, gaussians_per_tile_offsets, gaussian_indices_for_each_tile);
+}
+
 
 void FORWARD::render(
 	const dim3 grid, dim3 block,
