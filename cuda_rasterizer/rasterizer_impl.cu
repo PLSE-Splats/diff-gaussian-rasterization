@@ -30,6 +30,8 @@ namespace cg = cooperative_groups;
 #include "forward.h"
 #include "backward.h"
 
+#include <chrono>
+
 // Helper function to find the next-highest bit of the MSB
 // on the CPU.
 uint32_t getHigherMsb(uint32_t n)
@@ -221,6 +223,9 @@ int CudaRasterizer::Rasterizer::forward(
 	int* radii,
 	bool debug)
 {
+	// Wall clock timer for entire forward function
+	auto forward_start = std::chrono::high_resolution_clock::now();
+
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
 
@@ -275,6 +280,8 @@ int CudaRasterizer::Rasterizer::forward(
 		antialiasing
 	), debug)
 
+    // Wall clock timer for skm_render
+	auto skm_start = std::chrono::high_resolution_clock::now();
 	// One-kernel SKM renderer.
 	CHECK_CUDA(FORWARD::skm_render(
 		           P,
@@ -294,6 +301,12 @@ int CudaRasterizer::Rasterizer::forward(
 		           background,
 		           out_color
 	           ), debug);
+
+	const auto forward_end = std::chrono::high_resolution_clock::now();
+	const std::chrono::duration<double> skm_duration = forward_end - skm_start;
+	const std::chrono::duration<double> forward_duration = forward_end - forward_start;
+	std::cout << "SKM render wall time: " << skm_duration.count() << " seconds" << std::endl;
+	std::cout << "Forward function wall time: " << forward_duration.count() << " seconds" << std::endl;
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;
