@@ -30,6 +30,8 @@ namespace cg = cooperative_groups;
 #include "forward.h"
 #include "backward.h"
 
+#include <chrono>
+
 // Helper function to find the next-highest bit of the MSB
 // on the CPU.
 uint32_t getHigherMsb(uint32_t n)
@@ -221,6 +223,7 @@ int CudaRasterizer::Rasterizer::forward(
 	int* radii,
 	bool debug)
 {
+    auto forward_start = std::chrono::high_resolution_clock::now();
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
 
@@ -280,6 +283,7 @@ int CudaRasterizer::Rasterizer::forward(
 	), debug)
 
 	// Clustering passes.
+	auto cluster_start = std::chrono::high_resolution_clock::now();
 	for (int start_index = 0; start_index < P; start_index += BLOCK_X * BLOCK_Y) {
 		CHECK_CUDA(FORWARD::skm_cluster_pass(
 			           start_index,
@@ -300,13 +304,24 @@ int CudaRasterizer::Rasterizer::forward(
 			           d_cluster_data
 		           ), debug);
 	}
+	auto cluster_end = std::chrono::high_resolution_clock::now();
+	std::chrono::duration<double> cluster_duration = cluster_end - cluster_start;
 
 	// Final alpha composite.
 	CHECK_CUDA(FORWARD::cluster_alpha_composite(tile_grid, block, width, height, d_cluster_data, background, out_color),
 	           debug);
+	
+	auto compositing_end = std::chrono::high_resolution_clock::now();
+	std::chrono::duration<double> compositing_duration = compositing_end - cluster_end;
 
 	// Free the clustering data buffer.
 	cudaFree(d_cluster_data);
+
+	auto forward_end = std::chrono::high_resolution_clock::now();
+	std::chrono::duration<double> forward_duration = forward_end - forward_start;
+	std::cout << "Clustering wall time: " << cluster_duration.count() << " seconds" << std::endl;
+	std::cout << "Compositing wall time: " << compositing_duration.count() << " seconds" << std::endl;
+	std::cout << "Forward function wall time: " << forward_duration.count() << " seconds" << std::endl;
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;
