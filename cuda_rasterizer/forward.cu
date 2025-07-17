@@ -336,46 +336,46 @@ skm_cluster_passCUDA(
 	float expected_invdepth = 0.0f;
 
 	// Declare shared data structures.
-	__shared__ int collected_index[BLOCK_SIZE];
-	__shared__ float2 collected_xy[BLOCK_SIZE];
-	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-	__shared__ float collected_depth[BLOCK_SIZE];
+	__shared__ float2 collected_xy[INGEST_SIZE];
+	__shared__ float4 collected_conic_opacity[INGEST_SIZE];
+	__shared__ float collected_depth[INGEST_SIZE];
 
 
 	// Phase 1: Fetch data and validate.
 
-	// Initialize fetching variables (we assume the fetched data is invalid).
-	bool valid = false;
-	float2 fetched_xy;
+	for (int stride = static_cast<int>(thread_rank); stride < INGEST_SIZE; stride += BLOCK_SIZE) {
+		// Initialize fetching variables (we assume the fetched data is invalid).
+		bool valid = false;
+		float2 fetched_xy;
 
-	// Get the Gaussian index to fetch.
-	const int target_gaussian_index = start_index + static_cast<int>(thread_rank);
+		// Get the Gaussian index to fetch.
+		const int target_gaussian_index = start_index + stride;
 
-	// If this is a valid Gaussian index, check if it intersects with the tile.
-	if (target_gaussian_index < P) {
-		// Only do the computation if the gaussian has a radius.
-		int gaussian_radius = radii[target_gaussian_index];
-		if (gaussian_radius > 0) {
-			// Compute tile bounds.
-			fetched_xy = means_2d[target_gaussian_index];
-			uint2 bounds_min, bounds_max;
-			getRect(fetched_xy, gaussian_radius, bounds_min, bounds_max, grid_size);
+		// If this is a valid Gaussian index, check if it intersects with the tile.
+		if (target_gaussian_index < P) {
+			// Only do the computation if the gaussian has a radius.
+			int gaussian_radius = radii[target_gaussian_index];
+			if (gaussian_radius > 0) {
+				// Compute tile bounds.
+				fetched_xy = means_2d[target_gaussian_index];
+				uint2 bounds_min, bounds_max;
+				getRect(fetched_xy, gaussian_radius, bounds_min, bounds_max, grid_size);
 
-			// If the Gaussian intersects the tile, mark it as valid.
-			valid = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-			        group_index.y >= bounds_min.y && group_index.y < bounds_max.y;
+				// If the Gaussian intersects the tile, mark it as valid.
+				valid = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+				        group_index.y >= bounds_min.y && group_index.y < bounds_max.y;
+			}
 		}
-	}
 
-	// Write into shared data if the Gaussian is valid.
-	if (valid) {
-		collected_index[thread_rank] = target_gaussian_index;
-		collected_xy[thread_rank] = fetched_xy;
-		collected_conic_opacity[thread_rank] = conic_opacity[target_gaussian_index];
-		collected_depth[thread_rank] = depths[target_gaussian_index];
-	} else {
-		// Otherwise, flag it as invalid by setting the index to -1.
-		collected_index[thread_rank] = -1;
+		// Write into shared data if the Gaussian is valid.
+		if (valid) {
+			collected_xy[stride] = fetched_xy;
+			collected_conic_opacity[stride] = conic_opacity[target_gaussian_index];
+			collected_depth[stride] = depths[target_gaussian_index];
+		} else {
+			// Otherwise, flag it as invalid by setting the index to -1.
+			collected_depth[stride] = -1;
+		}
 	}
 	
 	// Sync writing.
@@ -388,9 +388,9 @@ skm_cluster_passCUDA(
 		return;
 
 	// Iterate over collected batch.
-	for (int sample_index = 0; sample_index < BLOCK_SIZE; ++sample_index) {
+	for (int sample_index = 0; sample_index < INGEST_SIZE; ++sample_index) {
 		// Skip if this sample is invalid.
-		if (collected_index[sample_index] < 0)
+		if (collected_depth[sample_index] < 0)
 			continue;
 
 		// FIXME: This follows OG implementation. Shouldn't this happen after all the data collection since we can cancel out before actually contributing?
@@ -426,9 +426,10 @@ skm_cluster_passCUDA(
 		}
 
 		// Collect the color
-		const float sample_r = features[collected_index[sample_index] * CHANNELS + 0];
-		const float sample_g = features[collected_index[sample_index] * CHANNELS + 1];
-		const float sample_b = features[collected_index[sample_index] * CHANNELS + 2];
+		const int gaussian_index = start_index + sample_index;
+		const float sample_r = features[gaussian_index * CHANNELS + 0];
+		const float sample_g = features[gaussian_index * CHANNELS + 1];
+		const float sample_b = features[gaussian_index * CHANNELS + 2];
 
 		// Collect the depth.
 		const float sample_depth = collected_depth[sample_index];
