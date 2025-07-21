@@ -105,6 +105,15 @@ namespace FORWARD
 		uint32_t *n_contrib,
 		float *cluster_data);
 
+	void render_clusters(
+		dim3 grid_size,
+		dim3 block_size,
+		int width,
+		int height,
+		const float *cluster_data,
+		const float *bg_color,
+		float *out_color);
+
 	// Main rasterization method.
 	void render(
 		const dim3 grid, dim3 block,

@@ -459,6 +459,92 @@ skm_clusterCUDA(int width, int height, const uint32_t * __restrict__ gaussians_p
 	}
 }
 
+template<uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+render_clustersCUDA(
+	const int width,
+	const int height,
+	const float *cluster_data,
+	const float *bg_color,
+	float *output_color) {
+	// Gather thread information.
+	auto block = cg::this_thread_block();
+	const auto group_index = block.group_index();
+	const auto thread_index = block.thread_index();
+
+	// Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+	// Compute if this thread is associated with a visible pixel.
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+	// Exit if the pixel is out of bounds.
+	if (!pixel_in_bounds)
+		return;
+
+	// Initialize rendering variables.
+	float pixel_cluster_data[CLUSTER_DATA_LENGTH] = {};
+	float transmittance = 1.0f;
+	float last_minimum_depth = 0.0f;
+	float pixel_color[CHANNELS] = {};
+
+	// Copy the cluster data for this pixel from global memory and finalize transmittance and color.
+	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+		pixel_cluster_data[i] = cluster_data[CLUSTER_AT(pixel_index) + i];
+	}
+
+	// Iterate over each cluster.
+	for (int cluster_index_i = 0; cluster_index_i < NUMBER_OF_CLUSTERS; ++cluster_index_i) {
+		// Find the closest cluster.
+		int target_cluster_index = 0;
+		float current_minimum_depth = FLT_MAX;
+		for (int cluster_index_j = 0; cluster_index_j < NUMBER_OF_CLUSTERS; ++cluster_index_j) {
+			const float this_cluster_depth = pixel_cluster_data[DATA_AT(cluster_index_j, DEPTH_INDEX)];
+			if (this_cluster_depth > last_minimum_depth && this_cluster_depth < current_minimum_depth) {
+				current_minimum_depth = this_cluster_depth;
+				target_cluster_index = cluster_index_j;
+			}
+		}
+
+		// Do any shortcut exits for compositing.
+
+		// Skip cluster if it's transparent.
+		if (pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] == 1.0f || transmittance <=
+		    MINIMUM_TRANSMITTANCE)
+			continue;
+
+		// Found the next cluster to process. Update last minimum depth.
+		last_minimum_depth = current_minimum_depth;
+
+		// Get cluster data.
+		const float cluster_alpha = 1 - pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)];
+		const float cluster_alpha_sum = pixel_cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)];
+		const float cluster_r = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)] /
+		                        cluster_alpha_sum;
+		const float cluster_g = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)] /
+		                        cluster_alpha_sum;
+		const float cluster_b = pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)] /
+		                        cluster_alpha_sum;
+
+		// Contribute the cluster to the final output color.
+		pixel_color[0] += cluster_alpha * cluster_r * transmittance;
+		pixel_color[1] += cluster_alpha * cluster_g * transmittance;
+		pixel_color[2] += cluster_alpha * cluster_b * transmittance;
+
+		// Update the transmittance.
+		transmittance *= 1 - min(1.0f, cluster_alpha);
+	}
+
+	// Write to output buffer and apply background color.
+	for (int channel = 0; channel < CHANNELS; channel++)
+		output_color[channel * height * width + pixel_index] =
+				pixel_color[channel] + transmittance * bg_color[channel];
+}
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -599,6 +685,11 @@ void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const uint32_t *gauss
 	                                                          gaussian_indices_for_each_tile, means_2d, conic_opacity,
 	                                                          depths, depth, features, final_transmittance, n_contrib,
 	                                                          cluster_data);
+}
+
+void FORWARD::render_clusters(dim3 grid_size, dim3 block_size, const int width, const int height,
+                              const float *cluster_data, const float *bg_color, float *out_color) {
+	render_clustersCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, cluster_data, bg_color, out_color);
 }
 
 
