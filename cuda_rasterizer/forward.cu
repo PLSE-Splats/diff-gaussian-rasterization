@@ -278,7 +278,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
-skm_clusterCUDA(int width, int height, const uint32_t *gaussians_per_tile_offsets, const uint32_t *gaussian_indices_for_each_tile) {
+skm_clusterCUDA(int width, int height, const uint32_t * __restrict__ gaussians_per_tile_offsets,
+                const uint32_t * __restrict__ gaussian_indices_for_each_tile, const
+                float2 * __restrict__ means_2d, const float4 * __restrict__ conic_opacity,
+                const float * __restrict__ depths, const float * __restrict__ features) {
 	// Setup data.
 
 	// Gather thread information.
@@ -317,16 +320,72 @@ skm_clusterCUDA(int width, int height, const uint32_t *gaussians_per_tile_offset
 	float expected_invdepth = 0.0f;
 
 	// Compute iterations needed for this tile.
-	const int upper_offset = gaussians_per_tile_offsets[tile_index];
-	const int lower_offset = tile_index == 0 ? 0 : gaussians_per_tile_offsets[tile_index - 1];
-	const int rounds = ((upper_offset - lower_offset + BLOCK_SIZE - 1) / BLOCK_SIZE);
-	int toDo = upper_offset - lower_offset;
+	const uint32_t upper_offset = gaussians_per_tile_offsets[tile_index];
+	const uint32_t lower_offset = tile_index == 0 ? 0 : gaussians_per_tile_offsets[tile_index - 1];
+	const uint32_t rounds = ((upper_offset - lower_offset + BLOCK_SIZE - 1) / BLOCK_SIZE);
+	int toDo = static_cast<int>(upper_offset - lower_offset);
 
 	// Declare shared data structures.
-	__shared__ int collected_index[BLOCK_SIZE];
+	__shared__ uint32_t collected_index[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_depth[BLOCK_SIZE];
+
+	// Iterate over batches of Gaussian data.
+	for (uint32_t batch_index = 0; batch_index < rounds; ++batch_index, toDo -= BLOCK_SIZE) {
+		// Phase 1: Fetch Gaussian data into shared memory.
+		uint32_t progress = batch_index * BLOCK_SIZE + thread_rank;
+		if (lower_offset + progress < upper_offset) {
+			uint32_t target_gaussian_index = gaussian_indices_for_each_tile[lower_offset + progress];
+			collected_index[thread_rank] = target_gaussian_index;
+			collected_xy[thread_rank] = means_2d[target_gaussian_index];
+			collected_depth[thread_rank] = depths[target_gaussian_index];
+		}
+
+		// Wait for all threads to finish fetching.
+		block.sync();
+
+		// Phase 2: Cluster the fetched Gaussian data (only for threads in bounds).
+		// Iterate over the fetched data.
+		for (int sample_index = 0; !done && sample_index < min(BLOCK_SIZE, toDo); ++sample_index) {
+			// Mark this Gaussian as a contributor.
+			contributing_gaussians_count++;
+
+			// Compute the alpha.
+
+			// Resample using conic matrix (cf. "Surface
+			// Splatting" by Zwicker et al., 2001)
+			const float2 sample_coordinate = collected_xy[sample_index];
+			const float2 d = {
+				sample_coordinate.x - static_cast<float>(pixel_coordinate.x),
+				sample_coordinate.y - static_cast<float>(pixel_coordinate.y)
+			};
+			const float4 con_o = collected_conic_opacity[sample_index];
+			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+			if (power > 0.0f)
+				continue;
+
+			// Eq. (2) from 3D Gaussian splatting paper.
+			// Obtain alpha by multiplying with Gaussian opacity
+			// and its exponential falloff from mean.
+			// Avoid numerical instabilities (see paper appendix).
+			const float sample_alpha = min(0.99f, con_o.w * exp(power));
+			if (sample_alpha < 1.0f / 255.0f)
+				continue;
+
+			// Collect the color
+			const uint32_t gaussian_index = collected_index[sample_index];
+			const float sample_r = features[gaussian_index * CHANNELS + 0];
+			const float sample_g = features[gaussian_index * CHANNELS + 1];
+			const float sample_b = features[gaussian_index * CHANNELS + 2];
+
+			// Collect the depth.
+			const float sample_depth = collected_depth[sample_index];
+		}
+
+		// Wait for all threads to finish clustering.
+		block.sync();
+	}
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -462,7 +521,12 @@ void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const uint32_t *gauss
                           const float2 *means_2d, const float4 *conic_opacity, const float *depths, float *depth,
                           const float *colors_precomp, const float *rgb, float *final_transmittance,
                           uint32_t *n_contrib, float *cluster_data) {
-	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, gaussians_per_tile_offsets, gaussian_indices_for_each_tile);
+	// Get the correct input for features.
+	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
+
+	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, gaussians_per_tile_offsets,
+	                                                          gaussian_indices_for_each_tile, means_2d, conic_opacity,
+	                                                          depths, features);
 }
 
 
