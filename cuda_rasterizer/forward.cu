@@ -281,7 +281,9 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 skm_clusterCUDA(int width, int height, const uint32_t * __restrict__ gaussians_per_tile_offsets,
                 const uint32_t * __restrict__ gaussian_indices_for_each_tile, const
                 float2 * __restrict__ means_2d, const float4 * __restrict__ conic_opacity,
-                const float * __restrict__ depths, const float * __restrict__ features) {
+                const float * __restrict__ depths, float * __restrict__ invdepth, const float * __restrict__ features,
+                float * __restrict__ final_transmittance, uint32_t
+                * __restrict__ n_contrib, float * __restrict__ cluster_data) {
 	// Setup data.
 
 	// Gather thread information.
@@ -301,9 +303,6 @@ skm_clusterCUDA(int width, int height, const uint32_t * __restrict__ gaussians_p
 
 	// Compute if this thread is associated with a visible pixel.
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
-
-	// Flag for if this pixel is done rendering (automatically is if not visible).
-	bool done = !pixel_in_bounds;
 
 	// Initialize pixel clustering data.
 	float pixel_cluster_data[CLUSTER_DATA_LENGTH] = {};
@@ -336,9 +335,10 @@ skm_clusterCUDA(int width, int height, const uint32_t * __restrict__ gaussians_p
 		// Phase 1: Fetch Gaussian data into shared memory.
 		uint32_t progress = batch_index * BLOCK_SIZE + thread_rank;
 		if (lower_offset + progress < upper_offset) {
-			uint32_t target_gaussian_index = gaussian_indices_for_each_tile[lower_offset + progress];
+			const uint32_t target_gaussian_index = gaussian_indices_for_each_tile[lower_offset + progress];
 			collected_index[thread_rank] = target_gaussian_index;
 			collected_xy[thread_rank] = means_2d[target_gaussian_index];
+			collected_conic_opacity[thread_rank] = conic_opacity[target_gaussian_index];
 			collected_depth[thread_rank] = depths[target_gaussian_index];
 		}
 
@@ -347,7 +347,7 @@ skm_clusterCUDA(int width, int height, const uint32_t * __restrict__ gaussians_p
 
 		// Phase 2: Cluster the fetched Gaussian data (only for threads in bounds).
 		// Iterate over the fetched data.
-		for (int sample_index = 0; !done && sample_index < min(BLOCK_SIZE, toDo); ++sample_index) {
+		for (int sample_index = 0; pixel_in_bounds && sample_index < min(BLOCK_SIZE, toDo); ++sample_index) {
 			// Mark this Gaussian as a contributor.
 			contributing_gaussians_count++;
 
@@ -381,10 +381,81 @@ skm_clusterCUDA(int width, int height, const uint32_t * __restrict__ gaussians_p
 
 			// Collect the depth.
 			const float sample_depth = collected_depth[sample_index];
+
+			// Pick target cluster.
+			int target_cluster_index = 0;
+
+			// Initialize empty clusters first.
+			if (pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX] < NUMBER_OF_CLUSTERS) {
+				// Default to the next open cluster.
+				target_cluster_index = static_cast<int>(pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]);
+
+				// Check initialized clusters for an exact match.
+				for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index) {
+					// Use it if found.
+					if (pixel_cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] == sample_depth) {
+						target_cluster_index = cluster_index;
+						break;
+					}
+
+					// If we didn't find a match, increment the uninitialized cluster index for next time.
+					if (cluster_index == target_cluster_index - 1) {
+						pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]++;
+					}
+				}
+			}
+			// Otherwise, find the closest cluster.
+			else {
+				float current_closest_depth_distance = FLT_MAX;
+				// If all clusters are initialized, find the closest cluster.
+				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+					// Replace the target index if it's closer.
+					const float distance_to_cluster = fabsf(
+						pixel_cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] - sample_depth);
+					if (distance_to_cluster < current_closest_depth_distance) {
+						current_closest_depth_distance = distance_to_cluster;
+						target_cluster_index = cluster_index;
+					}
+				}
+			}
+
+			// Update cluster information.
+			pixel_cluster_data[DATA_AT(target_cluster_index, SPLAT_COUNT_INDEX)]++;
+			pixel_cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
+			pixel_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
+			pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha * sample_r;
+			pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha * sample_g;
+			pixel_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha * sample_b;
+
+			// Update cluster mean.
+			const float current_mean = pixel_cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)];
+			pixel_cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)] =
+					current_mean + (sample_depth - current_mean) / pixel_cluster_data[DATA_AT(
+						target_cluster_index, SPLAT_COUNT_INDEX)];
+
+			// Update invdepth.
+			if (invdepth)
+				expected_invdepth += 1 / collected_depth[sample_index] * sample_alpha * pixel_transmittance;
+
+			pixel_transmittance *= 1 - sample_alpha;
+
+			// Update the last contributing count.
+			last_contributing_count = contributing_gaussians_count;
 		}
 
-		// Wait for all threads to finish clustering.
+		// Update backwards pass data
+		final_transmittance[pixel_index] *= pixel_transmittance;
+		n_contrib[pixel_index] += last_contributing_count;
+		if (invdepth)
+			invdepth[pixel_index] += expected_invdepth;
+
+		// Wait for all threads to finish clustering this batch.
 		block.sync();
+	}
+
+	// Phase 3: Write out the final cluster data for this pixel.
+	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+		cluster_data[CLUSTER_AT(pixel_index) + i] = pixel_cluster_data[i];
 	}
 }
 
@@ -526,7 +597,8 @@ void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const uint32_t *gauss
 
 	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, gaussians_per_tile_offsets,
 	                                                          gaussian_indices_for_each_tile, means_2d, conic_opacity,
-	                                                          depths, features);
+	                                                          depths, depth, features, final_transmittance, n_contrib,
+	                                                          cluster_data);
 }
 
 
