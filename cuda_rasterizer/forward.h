@@ -81,8 +81,7 @@ namespace FORWARD
 	 * @param conic_opacity Array of conic opacity values for each Gaussian.
 	 * @param depths Array of depth values for each Gaussian.
 	 * @param depth Array of depth values for each pixel in the image.
-	 * @param colors_precomp Array of precomputed colors for each Gaussian.
-	 * @param rgb Array of RGB values for each pixel in the image.
+	 * @param features Array of precomputed colors for each Gaussian.
 	 * @param final_transmittance Array of final transmittance values for each pixel in the image.
 	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
 	 * @param cluster_data Clustering data for each pixel.
@@ -99,8 +98,7 @@ namespace FORWARD
 		const float4 *conic_opacity,
 		const float *depths,
 		float *depth,
-		const float *colors_precomp,
-		const float *rgb,
+		const float *features,
 		float *final_transmittance,
 		uint32_t *n_contrib,
 		float *cluster_data);

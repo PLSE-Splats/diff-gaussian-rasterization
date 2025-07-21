@@ -280,6 +280,10 @@ int CudaRasterizer::Rasterizer::forward(
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
 	}
 
+	// Allocate device memory for cluster data.
+	float *d_cluster_data;
+	CHECK_CUDA(cudaMalloc(&d_cluster_data, width * height * CLUSTER_DATA_LENGTH * sizeof(float)), debug);
+
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -310,10 +314,6 @@ int CudaRasterizer::Rasterizer::forward(
 		antialiasing
 	), debug)
 
-	// Compute prefix sum over full list of touched tile counts by Gaussians
-	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
-	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
-
 	// Compute prefix sum over Gaussians per tile counts, to compute offsets for tile lists. List is of size num_tiles.
 	uint32_t *d_gaussians_per_tile_offsets = nullptr;
 	uint32_t *d_gaussians_per_tile_scan_temp = nullptr;
@@ -328,33 +328,11 @@ int CudaRasterizer::Rasterizer::forward(
 		cub::DeviceScan::InclusiveSum(d_gaussians_per_tile_scan_temp, gaussians_per_tile_scan_size,
 			d_gaussians_per_tile_count, d_gaussians_per_tile_offsets, num_tiles), debug)
 
-	// Retrieve total number of Gaussian instances to launch and resize aux buffers
-	int num_rendered;
-	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
-
 	// Get total number of Gaussians in each tile.
 	uint32_t num_gaussians_for_each_tile = 0;
 	CHECK_CUDA(
 		cudaMemcpy(&num_gaussians_for_each_tile, d_gaussians_per_tile_offsets + num_tiles - 1, sizeof(uint32_t),
 			cudaMemcpyDeviceToHost), debug);
-	printf("Total num gaussians for each tile: %d\n", num_gaussians_for_each_tile);
-
-	size_t binning_chunk_size = required<BinningState>(num_rendered);
-	char* binning_chunkptr = binningBuffer(binning_chunk_size);
-	BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
-
-	// For each instance to be rendered, produce adequate [ tile | depth ] key 
-	// and corresponding dublicated Gaussian indices to be sorted
-	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
-		P,
-		geomState.means2D,
-		geomState.depths,
-		geomState.point_offsets,
-		binningState.point_list_keys_unsorted,
-		binningState.point_list_unsorted,
-		radii,
-		tile_grid)
-	CHECK_CUDA(, debug)
 
 	// Write the Gaussian indices each tile will have to process. List of size num_gaussians_for_each_tile.
 	uint32_t *d_gaussian_indices_for_each_tile = nullptr;
@@ -365,42 +343,15 @@ int CudaRasterizer::Rasterizer::forward(
 		P, geomState.means2D, radii, d_gaussians_per_tile_offsets, d_gaussians_indices_for_each_tile_write_offsets,
 		d_gaussian_indices_for_each_tile, tile_grid);
 
-	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
-
-	// Sort complete list of (duplicated) Gaussian indices by keys
-	CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
-		binningState.list_sorting_space,
-		binningState.sorting_size,
-		binningState.point_list_keys_unsorted, binningState.point_list_keys,
-		binningState.point_list_unsorted, binningState.point_list,
-		num_rendered, 0, 32 + bit), debug)
-
-	CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
-
-	// Identify start and end of per-tile workloads in sorted list
-	if (num_rendered > 0)
-		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
-			num_rendered,
-			binningState.point_list_keys,
-			imgState.ranges);
-	CHECK_CUDA(, debug)
-
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-	CHECK_CUDA(FORWARD::render(
-		tile_grid, block,
-		imgState.ranges,
-		binningState.point_list,
-		width, height,
-		geomState.means2D,
-		feature_ptr,
-		geomState.conic_opacity,
-		imgState.accum_alpha,
-		imgState.n_contrib,
-		background,
-		out_color,
-		geomState.depths,
-		depth), debug)
+	CHECK_CUDA(
+		FORWARD::skm_cluster(tile_grid, block, d_gaussians_per_tile_offsets, d_gaussian_indices_for_each_tile, width,
+			height, radii, geomState.means2D, geomState.conic_opacity, geomState.depths, depth, feature_ptr, imgState.
+			accum_alpha, imgState.n_contrib, d_cluster_data), debug)
+
+	// Final alpha composite.
+	CHECK_CUDA(FORWARD::render_clusters(tile_grid, block, width, height, d_cluster_data, background, out_color), debug);
 
 	// Cleanup structures.
 	CHECK_CUDA(cudaFree(d_gaussians_per_tile_count), debug);
@@ -408,8 +359,9 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(cudaFree(d_gaussians_per_tile_offsets), debug);
 	CHECK_CUDA(cudaFree(d_gaussian_indices_for_each_tile), debug);
 	CHECK_CUDA(cudaFree(d_gaussians_indices_for_each_tile_write_offsets), debug);
+	CHECK_CUDA(cudaFree(d_cluster_data), debug);
 
-	return num_rendered;
+	return num_gaussians_for_each_tile;
 }
 
 // Produce necessary gradients for optimization, corresponding

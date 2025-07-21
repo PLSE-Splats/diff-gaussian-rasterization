@@ -676,11 +676,8 @@ renderCUDA(
 void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const uint32_t *gaussians_per_tile_offsets,
                           const uint32_t *gaussian_indices_for_each_tile, int width, int height, int *radii,
                           const float2 *means_2d, const float4 *conic_opacity, const float *depths, float *depth,
-                          const float *colors_precomp, const float *rgb, float *final_transmittance,
+                          const float *features, float *final_transmittance,
                           uint32_t *n_contrib, float *cluster_data) {
-	// Get the correct input for features.
-	const float *features = colors_precomp != nullptr ? colors_precomp : rgb;
-
 	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, gaussians_per_tile_offsets,
 	                                                          gaussian_indices_for_each_tile, means_2d, conic_opacity,
 	                                                          depths, depth, features, final_transmittance, n_contrib,
