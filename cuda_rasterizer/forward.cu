@@ -617,13 +617,77 @@ skm_clusterCUDA(int P, int width, int height, const int *radii, const float2 *me
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 cluster_renderCUDA(
-	int width,
-	int height,
+	const int width,
+	const int height,
 	const float *cluster_data,
 	const float *bg_color,
 	float *final_transmittance,
 	float *out_color
 ) {
+	// Gather thread information.
+	auto block = cg::this_thread_block();
+	const auto group_index = block.group_index();
+	const auto thread_index = block.thread_index();
+	const auto thread_rank = block.thread_rank();
+
+	// Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+	// Compute if this thread is associated with a visible pixel.
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+	// Exit if this pixel is not in bounds.
+	if (!pixel_in_bounds)
+		return;
+
+	// Initialize rendering variables.
+	float pixel_transmittance = 1.0f;
+	float pixel_color[CHANNELS] = {};
+	float last_minimum_depth = 0.0f;
+
+	// Iterate over each cluster.
+	for (int i = 0; i < NUMBER_OF_CLUSTERS; ++i) {
+		// Exit if transmittance is too low.
+		if (pixel_transmittance <= MINIMUM_TRANSMITTANCE)
+			break;
+
+		// Find the next closest cluster.
+		int target_cluster_index = 0;
+		float current_minimum_depth = FLT_MAX;
+		for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+			const float this_cluster_depth = cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)];
+			if (this_cluster_depth > last_minimum_depth && this_cluster_depth < current_minimum_depth) {
+				current_minimum_depth = this_cluster_depth;
+				target_cluster_index = cluster_index;
+			}
+		}
+		// Update the last minimum depth after finding the next cluster.
+		last_minimum_depth = current_minimum_depth;
+
+		// Get cluster data.
+		const float cluster_alpha = cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)];
+		const float cluster_r = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)];
+		const float cluster_g = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)];
+		const float cluster_b = cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)];
+
+		// Contribute the cluster to the final output color.
+		pixel_color[0] += cluster_alpha * cluster_r * pixel_transmittance;
+		pixel_color[1] += cluster_alpha * cluster_g * pixel_transmittance;
+		pixel_color[2] += cluster_alpha * cluster_b * pixel_transmittance;
+
+		// Update the transmittance.
+		pixel_transmittance *= 1 - min(1.0f, cluster_alpha);
+	}
+
+	// Write to output buffer and apply background color.
+	for (int channel = 0; channel < CHANNELS; channel++) {
+		out_color[channel * height * width + pixel_index] =
+				pixel_color[channel] + pixel_transmittance * bg_color[channel];
+	}
 }
 
 // Main rasterization method. Collaboratively works on one tile per
