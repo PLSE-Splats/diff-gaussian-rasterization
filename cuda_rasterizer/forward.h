@@ -19,7 +19,8 @@
 #include <glm/glm.hpp>
 
 // SKM parameters.
-#define NUMBER_OF_CLUSTERS 12
+#define NUMBER_OF_CLUSTERS 8
+#define INGEST_SIZE 1750
 // FIXME: Assumes channels is always 3.
 #define NUMBER_OF_DATA_POINTS 7
 #define DEPTH_INDEX 0
@@ -29,8 +30,11 @@
 #define PREMULTIPLIED_R_INDEX 4
 #define PREMULTIPLIED_G_INDEX 5
 #define PREMULTIPLIED_B_INDEX 6
+#define UNINITIALIZED_CLUSTER_INDEX_INDEX NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS
+#define CLUSTER_DATA_LENGTH (NUMBER_OF_CLUSTERS * NUMBER_OF_DATA_POINTS + 1) // +1 for uninitialized cluster index.
+#define CLUSTER_AT(PIXEL_INDEX) PIXEL_INDEX * CLUSTER_DATA_LENGTH
+#define DATA_AT(CLUSTER_INDEX, DATA) (CLUSTER_INDEX * NUMBER_OF_DATA_POINTS + DATA)
 #define MINIMUM_TRANSMITTANCE 0.0001f
-#define DATA_AT(INDEX, DATA) (INDEX * NUMBER_OF_DATA_POINTS + DATA)
 
 namespace FORWARD
 {
@@ -61,6 +65,63 @@ namespace FORWARD
 		uint32_t* tiles_touched,
 		bool prefiltered,
 		bool antialiasing);
+
+	/**
+	 * Perform clustering of Gaussian points using the SKM algorithm per pixel.
+	 * 
+	 * @param grid_size Number of blocks to launch (number of tiles in the image).
+	 * @param block_size Number of threads per block (size of a tile).
+	 * @param P Total number of Gaussian points.
+	 * @param width Image width.
+	 * @param height Image height.
+	 * @param radii Array of radii for each Gaussian.
+	 * @param means_2d Array of 2D coordinates of each Gaussian.
+	 * @param conic_opacity Array of conic opacity values for each Gaussian.
+	 * @param depths Array of depth values for each Gaussian.
+	 * @param features Color features for each Gaussian.
+	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
+	 * @param depth Array of depth values for each pixel in the image for backwards.
+	 * @param cluster_data Cluster data for each pixel in the image.
+	 */
+	void skm_cluster(
+		dim3 grid_size,
+		dim3 block_size,
+		int P,
+		int width,
+		int height,
+		const int *radii,
+		const float2 *means_2d,
+		const float4 *conic_opacity,
+		const float *depths,
+		const float *features,
+		uint32_t *n_contrib,
+		float *depth,
+		float *cluster_data
+	);
+
+	/**
+	 * Alpha composite the clusters to render the image.
+	 * 
+	 * @param grid_size Number of blocks to launch (number of tiles in the image).
+	 * @param block_size Number of threads per block (size of a tile).
+	 * @param width Image width.
+	 * @param height Image height.
+	 * @param cluster_data Cluster data for each pixel in the image.
+	 * @param bg_color Background color for the image.
+	 * @param final_transmittance Final transmittance values for each pixel in the image.
+	 * @param out_color Output color for each pixel in the image.
+	 */
+	void cluster_render(
+		dim3 grid_size,
+		dim3 block_size,
+		int width,
+		int height,
+		const float *cluster_data,
+		const float *bg_color,
+		float *final_transmittance,
+		float *out_color
+	);
+
 	/**
 	 * One-kernel rasterizer using SKM as the clustering algorithm.
 	 * 

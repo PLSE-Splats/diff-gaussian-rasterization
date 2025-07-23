@@ -280,8 +280,6 @@ int CudaRasterizer::Rasterizer::forward(
 		antialiasing
 	), debug)
 
-    // Wall clock timer for skm_render
-	auto skm_start = std::chrono::high_resolution_clock::now();
 	// One-kernel SKM renderer.
 	CHECK_CUDA(FORWARD::skm_render(
 		           P,
@@ -301,12 +299,6 @@ int CudaRasterizer::Rasterizer::forward(
 		           background,
 		           out_color
 	           ), debug);
-
-	const auto forward_end = std::chrono::high_resolution_clock::now();
-	const std::chrono::duration<double> skm_duration = forward_end - skm_start;
-	const std::chrono::duration<double> forward_duration = forward_end - forward_start;
-	std::cout << "SKM render wall time: " << skm_duration.count() << " seconds" << std::endl;
-	std::cout << "Forward function wall time: " << forward_duration.count() << " seconds" << std::endl;
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;

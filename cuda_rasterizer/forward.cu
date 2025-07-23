@@ -608,6 +608,24 @@ skm_renderCUDA(
 	}
 }
 
+template<uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+skm_clusterCUDA(int P, int width, int height, const int *radii, const float2 *means2d, const float4 *conic_opacity,
+                const float *depths, const float *features, uint32_t *n_contrib, float *depth, float *cluster_data) {
+}
+
+template<uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+cluster_renderCUDA(
+	int width,
+	int height,
+	const float *cluster_data,
+	const float *bg_color,
+	float *final_transmittance,
+	float *out_color
+) {
+}
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -766,6 +784,20 @@ void FORWARD::render(
 		depth);
 }
 
+void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width, const int height,
+                             const float *cluster_data, const float *bg_color, float *final_transmittance,
+                             float *out_color) {
+	cluster_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, cluster_data, bg_color,
+	                                                             final_transmittance, out_color);
+}
+
+void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const int P, const int width, const int height,
+                          const int *radii, const float2 *means_2d, const float4 *conic_opacity, const float *depths,
+                          const float *features, uint32_t *n_contrib, float *depth, float *cluster_data) {
+	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, width, height, radii, means_2d, conic_opacity,
+	                                                          depths, features, n_contrib, depth, cluster_data);
+}
+
 void FORWARD::skm_render(
 	const int P,
 	const dim3 grid_size,
@@ -861,3 +893,5 @@ void FORWARD::preprocess(int P, int D, int M,
 		antialiasing
 		);
 }
+
+
