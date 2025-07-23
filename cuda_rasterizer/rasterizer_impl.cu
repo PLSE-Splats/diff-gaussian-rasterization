@@ -251,6 +251,10 @@ int CudaRasterizer::Rasterizer::forward(
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
 	}
 
+	// Allocate clustering data buffer.
+	float *d_cluster_data;
+	CHECK_CUDA(cudaMalloc(&d_cluster_data, width * height * CLUSTER_DATA_LENGTH * sizeof(float)), debug);
+
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -280,25 +284,16 @@ int CudaRasterizer::Rasterizer::forward(
 		antialiasing
 	), debug)
 
-	// One-kernel SKM renderer.
-	CHECK_CUDA(FORWARD::skm_render(
-		           P,
-		           tile_grid,
-		           block,
-		           width,
-		           height,
-		           radii,
-		           geomState.means2D,
-		           geomState.conic_opacity,
-		           geomState.depths,
-		           depth,
-		           colors_precomp,
-		           geomState.rgb,
-		           imgState.accum_alpha,
-		           imgState.n_contrib,
-		           background,
-		           out_color
-	           ), debug);
+	// Cluster splats.
+	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	CHECK_CUDA(
+		FORWARD::skm_cluster(tile_grid, block, P, width, height, radii, geomState.means2D, geomState.conic_opacity,
+			geomState.depths, features, imgState.n_contrib, depth, d_cluster_data), debug);
+
+	// Render clustered Gaussians.
+	CHECK_CUDA(
+		FORWARD::cluster_render(tile_grid, block, width, height, d_cluster_data, background, imgState.accum_alpha,
+			out_color), debug);
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;
