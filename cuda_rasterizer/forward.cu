@@ -435,7 +435,7 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 		}
 
 		// Grid sync before next ingest to maintain splat cache.
-		block.sync();
+		cg::sync(cg::this_grid());
 	}
 
 	// Exit if pixel is not in bounds.
