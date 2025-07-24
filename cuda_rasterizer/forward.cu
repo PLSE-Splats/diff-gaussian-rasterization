@@ -610,8 +610,9 @@ skm_renderCUDA(
 
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
-skm_clusterCUDA(int P, int width, int height, const int *radii, const float2 *means2d, const float4 *conic_opacity,
-                const float *depths, const float *features, uint32_t *n_contrib, float *depth, float *cluster_data) {
+skm_clusterCUDA(const int P, const int width, const int height, const int *radii, const float2 *means2d,
+                const float4 *conic_opacity, const float *depths, const float *features, uint32_t *n_contrib,
+                float *cluster_data) {
 	// Gather thread information.
 	const auto block = cg::this_thread_block();
 	const auto group_index = block.group_index();
@@ -638,15 +639,13 @@ skm_clusterCUDA(int P, int width, int height, const int *radii, const float2 *me
 
 	// Contribution counters for backwards pass.
 	uint32_t contributing_splat_count = 0;
-	uint32_t last_contributing_count = 0;
-	float expected_invdepth = 0.0f;
-	
+
 	// Storage for hit-checked splats.
 	__shared__ int hit_indices[INGEST_SIZE];
 
 	// Iterate through all splats.
 	for (int starting_splat_index = 0; starting_splat_index < P; starting_splat_index += INGEST_SIZE) {
-		// Hit-check splats for this tile.
+		// Phase 1: Hit-check splats against this tile.
 		for (int stride = static_cast<int>(thread_rank); stride < INGEST_SIZE; stride += BLOCK_SIZE) {
 			const int target_splat_index = starting_splat_index + stride;
 
@@ -660,9 +659,122 @@ skm_clusterCUDA(int P, int width, int height, const int *radii, const float2 *me
 			uint2 bounds_min, bounds_max;
 			getRect(splat_mean, splat_radius, bounds_min, bounds_max, gridDim);
 
+			// Mark hit indices, use -1 for no hit.
 			hit_indices[stride] = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-			    group_index.y >= bounds_min.y && group_index.y < bounds_max.y ? target_splat_index : -1;
+			                      group_index.y >= bounds_min.y && group_index.y < bounds_max.y
+				                      ? target_splat_index
+				                      : -1;
 		}
+
+		// Sync hit-checking.
+		block.sync();
+
+		// Phase 2: Cluster splats in this ingest.
+
+		// Iterate over hit splats if this pixel is in bounds.
+		for (int sample_index = 0; pixel_in_bounds && sample_index < INGEST_SIZE; ++sample_index) {
+			// Get splat index.
+			const int sample_splat_index = hit_indices[sample_index];
+
+			// Skip index if it was not hit.
+			if (sample_splat_index == -1)
+				continue;
+
+			// Compute splat alpha.
+
+			// Resample using conic matrix (cf. "Surface
+			// Splatting" by Zwicker et al., 2001)
+			const float2 sample_coordinate = means2d[sample_splat_index];
+			const float2 d = {
+				sample_coordinate.x - static_cast<float>(pixel_coordinate.x),
+				sample_coordinate.y - static_cast<float>(pixel_coordinate.y)
+			};
+			const float4 con_o = conic_opacity[sample_splat_index];
+			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+			if (power > 0.0f)
+				continue;
+
+			// Eq. (2) from 3D Gaussian splatting paper.
+			// Obtain alpha by multiplying with Gaussian opacity
+			// and its exponential falloff from mean.
+			// Avoid numerical instabilities (see paper appendix).
+			const float sample_alpha = min(0.99f, con_o.w * exp(power));
+			if (sample_alpha < 1.0f / 255.0f)
+				continue;
+
+			// Collect the color
+			const float sample_r = features[sample_splat_index * CHANNELS + 0];
+			const float sample_g = features[sample_splat_index * CHANNELS + 1];
+			const float sample_b = features[sample_splat_index * CHANNELS + 2];
+
+			// Collect the depth.
+			const float sample_depth = depths[sample_splat_index];
+
+			// Do initial cluster guesses or argmin to find cluster.
+			int target_cluster_index = 0;
+
+			// Pick cluster to use. Initialize empty ones or find the argmin.
+			if (local_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX] < NUMBER_OF_CLUSTERS) {
+				// Start with the next open cluster index.
+				target_cluster_index = static_cast<int>(local_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]);
+
+				// Check initialized clusters for an exact match.
+				for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index) {
+					// Use it if found.
+					if (local_cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] == sample_depth) {
+						target_cluster_index = cluster_index;
+						break;
+					}
+
+					// If we didn't find a match, increment the uninitialized cluster index for next time.
+					if (cluster_index == target_cluster_index - 1) {
+						local_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]++;
+					}
+				}
+			} else {
+				float current_closest_depth_distance = local_cluster_data[DATA_AT(0, DEPTH_INDEX)];
+				// If all clusters are initialized, find the closest cluster.
+				for (int cluster_index = 1; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+					// Replace the target index if it's closer.
+					const float distance_to_cluster = fabsf(
+						local_cluster_data[DATA_AT(cluster_index, DEPTH_INDEX)] - sample_depth);
+					if (distance_to_cluster < current_closest_depth_distance) {
+						current_closest_depth_distance = distance_to_cluster;
+						target_cluster_index = cluster_index;
+					}
+				}
+			}
+
+			// Update cluster information.
+			local_cluster_data[DATA_AT(target_cluster_index, SPLAT_COUNT_INDEX)]++;
+			local_cluster_data[DATA_AT(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
+			local_cluster_data[DATA_AT(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
+			local_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha * sample_r;
+			local_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha * sample_g;
+			local_cluster_data[DATA_AT(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha * sample_b;
+
+			// Update cluster mean.
+			const float current_mean = local_cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)];
+			local_cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)] =
+					current_mean + (sample_depth - current_mean) / local_cluster_data[DATA_AT(
+						target_cluster_index, SPLAT_COUNT_INDEX)];
+
+			// Mark this splat as contributing.
+			contributing_splat_count++;
+		}
+
+		// Grid sync before next ingest to maintain splat cache.
+		cg::this_grid().sync();
+	}
+
+	// Exit if pixel is not in bounds.
+	if (!pixel_in_bounds)
+		return;
+
+	// Write to output buffers for in-bounds pixels.
+	n_contrib[pixel_index] = contributing_splat_count;
+	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+		cluster_data[CLUSTER_AT(pixel_index) + i] = local_cluster_data[i];
 	}
 }
 
@@ -911,7 +1023,7 @@ void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const int P, const in
                           const int *radii, const float2 *means_2d, const float4 *conic_opacity, const float *depths,
                           const float *features, uint32_t *n_contrib, float *depth, float *cluster_data) {
 	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, width, height, radii, means_2d, conic_opacity,
-	                                                          depths, features, n_contrib, depth, cluster_data);
+	                                                          depths, features, n_contrib, cluster_data);
 }
 
 void FORWARD::skm_render(
