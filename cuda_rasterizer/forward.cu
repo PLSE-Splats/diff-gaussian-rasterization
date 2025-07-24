@@ -771,6 +771,18 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 	if (!pixel_in_bounds)
 		return;
 
+	// Compute final transmittance and color for this pixel.
+	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+		local_cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1 - local_cluster_data[DATA_AT(
+			                                                                  cluster_index, TRANSMITTANCE_INDEX)];
+		local_cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_R_INDEX)] /= local_cluster_data[DATA_AT(
+			cluster_index, ALPHA_SUM_INDEX)];
+		local_cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_G_INDEX)] /= local_cluster_data[DATA_AT(
+			cluster_index, ALPHA_SUM_INDEX)];
+		local_cluster_data[DATA_AT(cluster_index, PREMULTIPLIED_B_INDEX)] /= local_cluster_data[DATA_AT(
+			cluster_index, ALPHA_SUM_INDEX)];
+	}
+
 	// Write to output buffers for in-bounds pixels.
 	n_contrib[pixel_index] = contributing_splat_count;
 	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
@@ -783,10 +795,11 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 cluster_renderCUDA(
 	const int width,
 	const int height,
-	const float *cluster_data,
-	const float *bg_color,
-	float *final_transmittance,
-	float *out_color
+	const float * __restrict__ cluster_data,
+	const float * __restrict__ bg_color,
+	float * __restrict__ final_transmittance,
+	float * __restrict__ invdepth,
+	float * __restrict__ out_color
 ) {
 	// Gather thread information.
 	auto block = cg::this_thread_block();
@@ -808,8 +821,9 @@ cluster_renderCUDA(
 	if (!pixel_in_bounds)
 		return;
 
-	// Initialize rendering variables.
+	// Initialize rendering variables.e
 	float pixel_transmittance = 1.0f;
+	float expected_invdepth = 0.0f;
 	float pixel_color[CHANNELS] = {};
 	float last_minimum_depth = 0.0f;
 
@@ -843,9 +857,19 @@ cluster_renderCUDA(
 		pixel_color[1] += cluster_alpha * cluster_g * pixel_transmittance;
 		pixel_color[2] += cluster_alpha * cluster_b * pixel_transmittance;
 
+		// Update invdepth.
+		if (invdepth)
+			expected_invdepth += 1 / cluster_data[DATA_AT(target_cluster_index, DEPTH_INDEX)] * cluster_alpha *
+					pixel_transmittance;
+
 		// Update the transmittance.
 		pixel_transmittance *= 1 - min(1.0f, cluster_alpha);
 	}
+
+	// Write to output buffers.
+	final_transmittance[pixel_index] = pixel_transmittance;
+	if (invdepth)
+		invdepth[pixel_index] = expected_invdepth;
 
 	// Write to output buffer and apply background color.
 	for (int channel = 0; channel < CHANNELS; channel++) {
@@ -1014,14 +1038,14 @@ void FORWARD::render(
 
 void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width, const int height,
                              const float *cluster_data, const float *bg_color, float *final_transmittance,
-                             float *out_color) {
+                             float *invdepth, float *out_color) {
 	cluster_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, cluster_data, bg_color,
-	                                                             final_transmittance, out_color);
+	                                                             final_transmittance, invdepth, out_color);
 }
 
 void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const int P, const int width, const int height,
                           const int *radii, const float2 *means_2d, const float4 *conic_opacity, const float *depths,
-                          const float *features, uint32_t *n_contrib, float *depth, float *cluster_data) {
+                          const float *features, uint32_t *n_contrib, float *cluster_data) {
 	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, width, height, radii, means_2d, conic_opacity,
 	                                                          depths, features, n_contrib, cluster_data);
 }

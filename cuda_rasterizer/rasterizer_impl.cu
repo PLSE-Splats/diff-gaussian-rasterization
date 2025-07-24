@@ -288,12 +288,12 @@ int CudaRasterizer::Rasterizer::forward(
 	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	CHECK_CUDA(
 		FORWARD::skm_cluster(tile_grid, block, P, width, height, radii, geomState.means2D, geomState.conic_opacity,
-			geomState.depths, features, imgState.n_contrib, depth, d_cluster_data), debug);
+			geomState.depths, features, imgState.n_contrib, d_cluster_data), debug);
 
 	// Render clustered Gaussians.
 	CHECK_CUDA(
 		FORWARD::cluster_render(tile_grid, block, width, height, d_cluster_data, background, imgState.accum_alpha,
-			out_color), debug);
+			depth,out_color), debug);
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;

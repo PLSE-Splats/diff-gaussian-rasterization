@@ -80,7 +80,6 @@ namespace FORWARD
 	 * @param depths Array of depth values for each Gaussian.
 	 * @param features Color features for each Gaussian.
 	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
-	 * @param depth Array of depth values for each pixel in the image for backwards.
 	 * @param cluster_data Cluster data for each pixel in the image.
 	 */
 	void skm_cluster(
@@ -95,7 +94,6 @@ namespace FORWARD
 		const float *depths,
 		const float *features,
 		uint32_t *n_contrib,
-		float *depth,
 		float *cluster_data
 	);
 
@@ -109,6 +107,7 @@ namespace FORWARD
 	 * @param cluster_data Cluster data for each pixel in the image.
 	 * @param bg_color Background color for the image.
 	 * @param final_transmittance Final transmittance values for each pixel in the image.
+	 * @param invdepth
 	 * @param out_color Output color for each pixel in the image.
 	 */
 	void cluster_render(
@@ -119,7 +118,7 @@ namespace FORWARD
 		const float *cluster_data,
 		const float *bg_color,
 		float *final_transmittance,
-		float *out_color
+		float *invdepth, float *out_color
 	);
 
 	/**
