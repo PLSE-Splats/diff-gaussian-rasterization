@@ -612,6 +612,58 @@ template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 skm_clusterCUDA(int P, int width, int height, const int *radii, const float2 *means2d, const float4 *conic_opacity,
                 const float *depths, const float *features, uint32_t *n_contrib, float *depth, float *cluster_data) {
+	// Gather thread information.
+	const auto block = cg::this_thread_block();
+	const auto group_index = block.group_index();
+	const auto thread_index = block.thread_index();
+	const auto thread_rank = block.thread_rank();
+
+	// Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+	// Compute if this thread is associated with a visible pixel.
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+	// Local clustering data.
+	float local_cluster_data[CLUSTER_DATA_LENGTH] = {};
+
+	// Set transmittance to 1.0 for all clusters.
+	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+		local_cluster_data[DATA_AT(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
+	}
+
+	// Contribution counters for backwards pass.
+	uint32_t contributing_splat_count = 0;
+	uint32_t last_contributing_count = 0;
+	float expected_invdepth = 0.0f;
+	
+	// Storage for hit-checked splats.
+	__shared__ int hit_indices[INGEST_SIZE];
+
+	// Iterate through all splats.
+	for (int starting_splat_index = 0; starting_splat_index < P; starting_splat_index += INGEST_SIZE) {
+		// Hit-check splats for this tile.
+		for (int stride = static_cast<int>(thread_rank); stride < INGEST_SIZE; stride += BLOCK_SIZE) {
+			const int target_splat_index = starting_splat_index + stride;
+
+			// Stop if splat is out of bounds.
+			if (target_splat_index >= starting_splat_index + INGEST_SIZE)
+				break;
+
+			// Get splat radius and check if it intersects with the tile.
+			const int splat_radius = radii[target_splat_index];
+			const float2 splat_mean = means2d[target_splat_index];
+			uint2 bounds_min, bounds_max;
+			getRect(splat_mean, splat_radius, bounds_min, bounds_max, gridDim);
+
+			hit_indices[stride] = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
+			    group_index.y >= bounds_min.y && group_index.y < bounds_max.y ? target_splat_index : -1;
+		}
+	}
 }
 
 template<uint32_t CHANNELS>
