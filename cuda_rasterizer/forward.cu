@@ -303,14 +303,18 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 	// Contribution counters for backwards pass.
 	uint32_t contributing_splat_count = 0;
 
-	// Storage for hit-checked splats.
+	// Storage for hit-checked splats. Default to miss (-1).
 	__shared__ int hit_indices[INGEST_SIZE];
 
 	// Iterate through all splats.
 	for (int starting_splat_index = 0; starting_splat_index < P; starting_splat_index += INGEST_SIZE) {
 		// Phase 1: Hit-check splats against this tile.
 		for (int stride = static_cast<int>(thread_rank); stride < INGEST_SIZE; stride += BLOCK_SIZE) {
+			// Get target splat index.
 			const int target_splat_index = starting_splat_index + stride;
+
+			// Default to miss (-1).
+			hit_indices[stride] = -1;
 
 			// Stop if splat is out of bounds.
 			if (target_splat_index >= starting_splat_index + INGEST_SIZE)
@@ -318,15 +322,16 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 
 			// Get splat radius and check if it intersects with the tile.
 			const int splat_radius = radii[target_splat_index];
-			const float2 splat_mean = means2d[target_splat_index];
-			uint2 bounds_min, bounds_max;
-			getRect(splat_mean, splat_radius, bounds_min, bounds_max, gridDim);
+			if (splat_radius > 0) {
+				const float2 splat_mean = means2d[target_splat_index];
+				uint2 bounds_min, bounds_max;
+				getRect(splat_mean, splat_radius, bounds_min, bounds_max, gridDim);
 
-			// Mark hit indices, use -1 for no hit.
-			hit_indices[stride] = group_index.x >= bounds_min.x && group_index.x < bounds_max.x &&
-			                      group_index.y >= bounds_min.y && group_index.y < bounds_max.y
-				                      ? target_splat_index
-				                      : -1;
+				// Mark hit indices.
+				if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >= bounds_min.y &&
+				    group_index.y < bounds_max.y)
+					hit_indices[stride] = target_splat_index;
+			}
 		}
 
 		// Sync hit-checking.
