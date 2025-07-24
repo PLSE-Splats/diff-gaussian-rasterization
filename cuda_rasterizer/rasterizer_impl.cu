@@ -293,7 +293,10 @@ int CudaRasterizer::Rasterizer::forward(
 	// Render clustered Gaussians.
 	CHECK_CUDA(
 		FORWARD::cluster_render(tile_grid, block, width, height, d_cluster_data, background, imgState.accum_alpha,
-			depth,out_color), debug);
+			depth, out_color), debug);
+
+	// Free the clustering data buffer.
+	CHECK_CUDA(cudaFree(d_cluster_data), debug);
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;

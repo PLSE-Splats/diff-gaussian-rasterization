@@ -322,16 +322,14 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 
 			// Get splat radius and check if it intersects with the tile.
 			const int splat_radius = radii[target_splat_index];
-			if (splat_radius > 0) {
-				const float2 splat_mean = means2d[target_splat_index];
-				uint2 bounds_min, bounds_max;
-				getRect(splat_mean, splat_radius, bounds_min, bounds_max, gridDim);
+			const float2 splat_mean = means2d[target_splat_index];
+			uint2 bounds_min, bounds_max;
+			getRect(splat_mean, splat_radius, bounds_min, bounds_max, gridDim);
 
-				// Mark hit indices.
-				if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >= bounds_min.y &&
-				    group_index.y < bounds_max.y)
-					hit_indices[stride] = target_splat_index;
-			}
+			// Mark hit indices.
+			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >= bounds_min.y &&
+			    group_index.y < bounds_max.y)
+				hit_indices[stride] = target_splat_index;
 		}
 
 		// Sync hit-checking.
@@ -386,6 +384,11 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 				// Start with the next open cluster index.
 				target_cluster_index = static_cast<int>(local_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]);
 
+				// Increment the uninitialized cluster if this is the first sample.
+				if (target_cluster_index == 0) {
+					local_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX]++;
+				}
+
 				// Check initialized clusters for an exact match.
 				for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index) {
 					// Use it if found.
@@ -432,7 +435,7 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 		}
 
 		// Grid sync before next ingest to maintain splat cache.
-		cg::this_grid().sync();
+		block.sync();
 	}
 
 	// Exit if pixel is not in bounds.
