@@ -121,44 +121,6 @@ namespace FORWARD
 		float *invdepth, float *out_color
 	);
 
-	/**
-	 * One-kernel rasterizer using SKM as the clustering algorithm.
-	 * 
-	 * @param P Total number of Gaussian points.
-	 * @param grid_size Number of blocks to launch (number of tiles in the image).
-	 * @param block_size Number of threads per block (size of a tile).
-	 * @param width Image width.
-	 * @param height Image height.
-	 * @param radii Array of radii for each Gaussian.
-	 * @param means_2d Array of 2D coordinates of each Gaussian.
-	 * @param conic_opacity Array of conic opacity values for each Gaussian.
-	 * @param depths Array of depth values for each Gaussian.
-	 * @param depth Array of depth values for each pixel in the image.
-	 * @param colors_precomp Array of precomputed colors for each Gaussian.
-	 * @param rgb Array of RGB values for each pixel in the image.
-	 * @param final_transmittance Array of final transmittance values for each pixel in the image.
-	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
-	 * @param bg_color Background color for the image.
-	 * @param out_color Rendered output color for each pixel in the image.
-	 */
-	void skm_render(
-		int P,
-		dim3 grid_size,
-		dim3 block_size,
-		int width,
-		int height,
-		int *radii,
-		const float2 *means_2d,
-		const float4 *conic_opacity,
-		const float *depths,
-		float *depth,
-		const float *colors_precomp,
-		const float *rgb,
-		float *final_transmittance,
-		uint32_t *n_contrib,
-		const float *bg_color,
-		float *out_color);
-
 	// Main rasterization method.
 	void render(
 		const dim3 grid, dim3 block,
