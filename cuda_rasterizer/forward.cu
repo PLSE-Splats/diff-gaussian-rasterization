@@ -297,7 +297,7 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 
 	// Set transmittance to 1.0 for all clusters.
 	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-		pixel_cluster_data[DATA_IN_CLUSTER(cluster_index, TRANSMITTANCE_INDEX)] = 1.0f;
+		pixel_cluster_data[DATA_IN_CLUSTER(cluster_index, ALPHA_INDEX)] = 1.0f;
 	}
 
 	// Contribution counters for backwards pass.
@@ -416,10 +416,10 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 				}
 			}
 
-			// Update cluster information.
+			// Update cluster information (note: cluster alpha is computed as 1 - transmittance).
 			pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, SPLAT_COUNT_INDEX)]++;
 			pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
-			pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, TRANSMITTANCE_INDEX)] *= 1 - sample_alpha;
+			pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_INDEX)] *= 1 - sample_alpha;
 			pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha * sample_r;
 			pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha * sample_g;
 			pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha * sample_b;
@@ -435,17 +435,17 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 		}
 
 		// Grid sync before next ingest to maintain splat cache.
-		cg::sync(cg::this_grid());
+		block.sync();
 	}
 
 	// Exit if pixel is not in bounds.
 	if (!pixel_in_bounds)
 		return;
 
-	// Compute final transmittance and color for this pixel.
+	// For each cluster, convert transmittance to alpha and compute the final RGB values.
 	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-		pixel_cluster_data[DATA_IN_CLUSTER(cluster_index, TRANSMITTANCE_INDEX)] = 1 - pixel_cluster_data[DATA_IN_CLUSTER(
-			                                                                  cluster_index, TRANSMITTANCE_INDEX)];
+		pixel_cluster_data[DATA_IN_CLUSTER(cluster_index, ALPHA_INDEX)] = 1 - pixel_cluster_data[DATA_IN_CLUSTER(
+			                                                                  cluster_index, ALPHA_INDEX)];
 		pixel_cluster_data[DATA_IN_CLUSTER(cluster_index, PREMULTIPLIED_R_INDEX)] /= pixel_cluster_data[DATA_IN_CLUSTER(
 			cluster_index, ALPHA_SUM_INDEX)];
 		pixel_cluster_data[DATA_IN_CLUSTER(cluster_index, PREMULTIPLIED_G_INDEX)] /= pixel_cluster_data[DATA_IN_CLUSTER(
@@ -504,7 +504,7 @@ cluster_renderCUDA(
 	float pixel_color[CHANNELS] = {};
 	float last_minimum_depth = 0.0f;
 
-	// Iterate over each cluster.
+	// Compute every cluster.
 	for (int i = 0; i < NUMBER_OF_CLUSTERS; ++i) {
 		// Exit if transmittance is too low.
 		if (pixel_transmittance <= MINIMUM_TRANSMITTANCE)
@@ -524,7 +524,7 @@ cluster_renderCUDA(
 		last_minimum_depth = current_minimum_depth;
 
 		// Get cluster data.
-		const float cluster_alpha = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, TRANSMITTANCE_INDEX)];
+		const float cluster_alpha = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_INDEX)];
 		const float cluster_r = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_R_INDEX)];
 		const float cluster_g = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_G_INDEX)];
 		const float cluster_b = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_B_INDEX)];
@@ -549,7 +549,7 @@ cluster_renderCUDA(
 		invdepth[pixel_index] = expected_invdepth;
 
 	// Write to output buffer and apply background color.
-	for (int channel = 0; channel < CHANNELS; channel++) {
+	for (int channel = 0; channel < CHANNELS; ++channel) {
 		out_color[channel * height * width + pixel_index] =
 				pixel_color[channel] + pixel_transmittance * bg_color[channel];
 	}
