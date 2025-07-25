@@ -273,9 +273,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
-skm_clusterCUDA(const int P, const int width, const int height, const int *radii, const float2 *means2d,
-                const float4 *conic_opacity, const float *depths, const float *features, uint32_t *n_contrib,
-                float *cluster_data) {
+skm_clusterCUDA(const int P, const int width, const int height, const dim3 grid_size, const int *radii,
+                const float2 *means2d, const float4 *conic_opacity, const float *depths, const float *features,
+                uint32_t *n_contrib, float *cluster_data) {
 	// Gather thread information.
 	const auto block = cg::this_thread_block();
 	const auto group_index = block.group_index();
@@ -324,7 +324,7 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 			const int splat_radius = radii[target_splat_index];
 			const float2 splat_mean = means2d[target_splat_index];
 			uint2 bounds_min, bounds_max;
-			getRect(splat_mean, splat_radius, bounds_min, bounds_max, gridDim);
+			getRect(splat_mean, splat_radius, bounds_min, bounds_max, grid_size);
 
 			// Mark hit indices.
 			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >= bounds_min.y &&
@@ -432,6 +432,10 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 
 			// Mark this splat as contributing.
 			contributing_splat_count++;
+
+			if (pixel_index == 0 && target_cluster_index == 3) {
+				printf("%f\n", pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_INDEX)]);
+			}
 		}
 
 		// Grid sync before next ingest to maintain splat cache.
@@ -458,6 +462,16 @@ skm_clusterCUDA(const int P, const int width, const int height, const int *radii
 	n_contrib[pixel_index] = contributing_splat_count;
 	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
 		cluster_data[CLUSTERS_AT_PIXEL(pixel_index) + i] = pixel_cluster_data[i];
+
+		if (pixel_index == 0) {
+			printf("%f, ", pixel_cluster_data[i]);
+			if ((i + 1) % 7 == 0) {
+				printf("\n");
+			}
+		}
+	}
+	if (pixel_index == 0) {
+		printf("\n");
 	}
 }
 
@@ -476,7 +490,6 @@ cluster_renderCUDA(
 	auto block = cg::this_thread_block();
 	const auto group_index = block.group_index();
 	const auto thread_index = block.thread_index();
-	const auto thread_rank = block.thread_rank();
 
 	// Gather pixel information.
 	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
@@ -541,6 +554,11 @@ cluster_renderCUDA(
 
 		// Update the transmittance.
 		pixel_transmittance *= 1 - min(1.0f, cluster_alpha);
+
+		if (pixel_index == 0) {
+			printf("%d: %f, %f, %f, %f\n", target_cluster_index, pixel_color[0], pixel_color[1], pixel_color[2],
+			       pixel_transmittance);
+		}
 	}
 
 	// Write to output buffers.
@@ -723,8 +741,8 @@ void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width, c
 void FORWARD::skm_cluster(dim3 grid_size, dim3 block_size, const int P, const int width, const int height,
                           const int *radii, const float2 *means_2d, const float4 *conic_opacity, const float *depths,
                           const float *features, uint32_t *n_contrib, float *cluster_data) {
-	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, width, height, radii, means_2d, conic_opacity,
-	                                                          depths, features, n_contrib, cluster_data);
+	skm_clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(P, width, height, grid_size, radii, means_2d,
+	                                                          conic_opacity, depths, features, n_contrib, cluster_data);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
