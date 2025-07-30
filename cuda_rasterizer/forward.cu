@@ -317,7 +317,7 @@ skm_clusterCUDA(const int P, const int width, const int height, const dim3 grid_
 			hit_indices[stride] = -1;
 
 			// Stop if splat is out of bounds.
-			if (target_splat_index >= starting_splat_index + INGEST_SIZE)
+			if (target_splat_index >= starting_splat_index + INGEST_SIZE || target_splat_index >= P)
 				break;
 
 			// Get splat radius and check if it intersects with the tile.
@@ -327,7 +327,8 @@ skm_clusterCUDA(const int P, const int width, const int height, const dim3 grid_
 			getRect(splat_mean, splat_radius, bounds_min, bounds_max, grid_size);
 
 			// Mark hit indices.
-			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >= bounds_min.y &&
+			if (splat_radius > 0 && group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >=
+			    bounds_min.y &&
 			    group_index.y < bounds_max.y)
 				hit_indices[stride] = target_splat_index;
 		}
@@ -432,10 +433,6 @@ skm_clusterCUDA(const int P, const int width, const int height, const dim3 grid_
 
 			// Mark this splat as contributing.
 			contributing_splat_count++;
-
-			if (pixel_index == 0 && target_cluster_index == 3) {
-				printf("%f\n", pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_INDEX)]);
-			}
 		}
 
 		// Grid sync before next ingest to maintain splat cache.
@@ -460,19 +457,8 @@ skm_clusterCUDA(const int P, const int width, const int height, const dim3 grid_
 
 	// Write to output buffers for in-bounds pixels.
 	n_contrib[pixel_index] = contributing_splat_count;
-	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i)
 		cluster_data[CLUSTERS_AT_PIXEL(pixel_index) + i] = pixel_cluster_data[i];
-
-		if (pixel_index == 0) {
-			printf("%f, ", pixel_cluster_data[i]);
-			if ((i + 1) % 7 == 0) {
-				printf("\n");
-			}
-		}
-	}
-	if (pixel_index == 0) {
-		printf("\n");
-	}
 }
 
 template<uint32_t CHANNELS>
@@ -554,11 +540,6 @@ cluster_renderCUDA(
 
 		// Update the transmittance.
 		pixel_transmittance *= 1 - min(1.0f, cluster_alpha);
-
-		if (pixel_index == 0) {
-			printf("%d: %f, %f, %f, %f\n", target_cluster_index, pixel_color[0], pixel_color[1], pixel_color[2],
-			       pixel_transmittance);
-		}
 	}
 
 	// Write to output buffers.
