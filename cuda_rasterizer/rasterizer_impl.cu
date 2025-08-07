@@ -288,7 +288,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	for (int starting_splat_index = 0; starting_splat_index < P; starting_splat_index += INGEST_SIZE) {
 		CHECK_CUDA(
-			FORWARD::skm_cluster(tile_grid, block, starting_splat_index, P, width, height, radii, geomState.means2D,
+			FORWARD::skm_cluster_pass(tile_grid, block, starting_splat_index, P, width, height, radii, geomState.means2D,
 				geomState.conic_opacity, geomState.depths, features, imgState.n_contrib, d_cluster_data), debug);
 	}
 

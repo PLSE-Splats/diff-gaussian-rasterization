@@ -85,7 +85,7 @@ namespace FORWARD
 	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
 	 * @param cluster_data Cluster data for each pixel in the image.
 	 */
-	void skm_cluster(
+	void skm_cluster_pass(
 		dim3 grid_size,
 		dim3 block_size,
 		int starting_splat_index,
@@ -123,22 +123,6 @@ namespace FORWARD
 		float *final_transmittance,
 		float *invdepth, float *out_color
 	);
-
-	// Main rasterization method.
-	void render(
-		const dim3 grid, dim3 block,
-		const uint2* ranges,
-		const uint32_t* point_list,
-		int W, int H,
-		const float2* points_xy_image,
-		const float* features,
-		const float4* conic_opacity,
-		float* final_T,
-		uint32_t* n_contrib,
-		const float* bg_color,
-		float* out_color,
-		float* depths,
-		float* depth);
 }
 
 
