@@ -73,6 +73,7 @@ namespace FORWARD
 	 * 
 	 * @param grid_size Number of blocks to launch (number of tiles in the image).
 	 * @param block_size Number of threads per block (size of a tile).
+	 * @param starting_splat_index
 	 * @param P Total number of Gaussian points.
 	 * @param width Image width.
 	 * @param height Image height.
@@ -87,6 +88,7 @@ namespace FORWARD
 	void skm_cluster(
 		dim3 grid_size,
 		dim3 block_size,
+		int starting_splat_index,
 		int P,
 		int width,
 		int height,
@@ -95,8 +97,7 @@ namespace FORWARD
 		const float4 *conic_opacity,
 		const float *depths,
 		const float *features,
-		uint32_t *n_contrib,
-		float *cluster_data
+		uint32_t *n_contrib, float *cluster_data
 	);
 
 	/**
