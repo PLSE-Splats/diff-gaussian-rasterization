@@ -296,8 +296,11 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 	// Contribution counters for backwards pass.
 	uint32_t contributing_splat_count = 0;
 
-	// Storage for hit-checked splats. Default to miss (-1).
-	__shared__ int hit_indices[INGEST_SIZE];
+	// Storage for hit-checked splats. Default depth to -1 to mark as miss.
+	__shared__ float2 collected_means2d[INGEST_SIZE];
+	__shared__ float4 collected_conic_opacity[INGEST_SIZE];
+	__shared__ float3 collected_features[INGEST_SIZE];
+	__shared__ float collected_depth[INGEST_SIZE];
 
 	// Phase 1: Hit-check splats against this tile.
 	for (int stride = static_cast<int>(thread_rank); stride < INGEST_SIZE; stride += BLOCK_SIZE) {
@@ -305,7 +308,7 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 		const int target_splat_index = starting_splat_index + stride;
 
 		// Default to miss (-1).
-		hit_indices[stride] = -1;
+		collected_depth[stride] = -1;
 
 		// Stop if splat is out of bounds.
 		if (target_splat_index >= starting_splat_index + INGEST_SIZE || target_splat_index >= P)
@@ -313,15 +316,23 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 
 		// Get splat radius and check if it intersects with the tile.
 		const int splat_radius = radii[target_splat_index];
-		const float2 splat_mean = means2d[target_splat_index];
-		uint2 bounds_min, bounds_max;
-		getRect(splat_mean, splat_radius, bounds_min, bounds_max, grid_size);
+		if (splat_radius > 0) {
+			const float2 splat_mean = means2d[target_splat_index];
+			uint2 bounds_min, bounds_max;
+			getRect(splat_mean, splat_radius, bounds_min, bounds_max, grid_size);
 
-		// Mark hit indices.
-		if (splat_radius > 0 && group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >=
-		    bounds_min.y &&
-		    group_index.y < bounds_max.y)
-			hit_indices[stride] = target_splat_index;
+			// Fetch hit splats.
+			if (group_index.x >= bounds_min.x && group_index.x < bounds_max.x && group_index.y >=
+			    bounds_min.y &&
+			    group_index.y < bounds_max.y) {
+				collected_means2d[stride] = splat_mean;
+				collected_conic_opacity[stride] = conic_opacity[target_splat_index];
+				collected_features[stride].x = features[target_splat_index * CHANNELS + 0];
+				collected_features[stride].y = features[target_splat_index * CHANNELS + 1];
+				collected_features[stride].z = features[target_splat_index * CHANNELS + 2];
+				collected_depth[stride] = depths[target_splat_index];
+			}
+		}
 	}
 
 	// Sync hit-checking.
@@ -350,23 +361,26 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 
 	// Iterate over hit splats if this pixel is in bounds.
 	for (int sample_index = 0; sample_index < INGEST_SIZE; ++sample_index) {
-		// Get splat index.
-		const int sample_splat_index = hit_indices[sample_index];
+		// Get this sample's data.
+		const float2 sample_mean2d = collected_means2d[sample_index];
+		const float4 sample_conic_opacity = collected_conic_opacity[sample_index];
+		const float3 sample_features = collected_features[sample_index];
+		const float sample_depth = collected_depth[sample_index];
 
 		// Skip index if it was not hit.
-		if (sample_splat_index == -1)
+		if (sample_depth == -1)
 			continue;
 
 		// Compute splat alpha.
 
 		// Resample using conic matrix (cf. "Surface
 		// Splatting" by Zwicker et al., 2001)
-		const float2 sample_coordinate = means2d[sample_splat_index];
+		const float2 sample_coordinate = sample_mean2d;
 		const float2 d = {
 			sample_coordinate.x - static_cast<float>(pixel_coordinate.x),
 			sample_coordinate.y - static_cast<float>(pixel_coordinate.y)
 		};
-		const float4 con_o = conic_opacity[sample_splat_index];
+		const float4 con_o = sample_conic_opacity;
 		const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
 		if (power > 0.0f)
 			continue;
@@ -378,14 +392,6 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 		const float sample_alpha = min(0.99f, con_o.w * exp(power));
 		if (sample_alpha < 1.0f / 255.0f)
 			continue;
-
-		// Collect the color
-		const float sample_r = features[sample_splat_index * CHANNELS + 0];
-		const float sample_g = features[sample_splat_index * CHANNELS + 1];
-		const float sample_b = features[sample_splat_index * CHANNELS + 2];
-
-		// Collect the depth.
-		const float sample_depth = depths[sample_splat_index];
 
 		// Do initial cluster guesses or argmin to find cluster.
 		int target_cluster_index = 0;
@@ -431,9 +437,12 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, SPLAT_COUNT_INDEX)]++;
 		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_SUM_INDEX)] += sample_alpha;
 		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_INDEX)] *= 1 - sample_alpha;
-		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha * sample_r;
-		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha * sample_g;
-		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha * sample_b;
+		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_R_INDEX)] += sample_alpha *
+				sample_features.x;
+		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_G_INDEX)] += sample_alpha *
+				sample_features.y;
+		pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_B_INDEX)] += sample_alpha *
+				sample_features.z;
 
 		// Update cluster mean.
 		const float current_mean = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, DEPTH_INDEX)];
