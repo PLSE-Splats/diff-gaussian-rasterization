@@ -274,10 +274,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 skm_cluster_passCUDA(const int starting_splat_index, const int P, const int width, const int height, const dim3 grid_size,
-                const int *radii, const float2 *means2d, const float4 *conic_opacity, const float *depths,
-                const float *features, uint32_t *n_contrib, float *cluster_depth, int *cluster_splat_count, float
-                *cluster_alpha_sum, float *cluster_alpha, float *cluster_premultiplied_r,
-                float *cluster_premultiplied_g, float *cluster_premultiplied_b) {
+                     const int *radii, const float2 *means2d, const float4 *conic_opacity, const float *depths,
+                     const float *features, uint32_t *n_contrib, float *cluster_depth, int *cluster_splat_count, float
+                     *cluster_alpha_sum, float *cluster_alpha, float *cluster_premultiplied_r,
+                     float *cluster_premultiplied_g, float *cluster_premultiplied_b,
+                     int *cluster_uninitialized_cluster_index) {
 	// Gather thread information.
 	const auto block = cg::this_thread_block();
 	const auto group_index = block.group_index();
@@ -345,9 +346,21 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 			pixel_cluster_data[DATA_IN_CLUSTER(cluster_index, ALPHA_INDEX)] = 1.0f;
 		}
 	} else {
-		for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
-			pixel_cluster_data[i] = cluster_data[CLUSTERS_AT_PIXEL(pixel_index) + i];
+		for (int i = 0; i < NUMBER_OF_CLUSTERS; ++i) {
+			pixel_cluster_data[DATA_IN_CLUSTER(i, DEPTH_INDEX)] = cluster_depth[i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, SPLAT_COUNT_INDEX)] = cluster_splat_count[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, ALPHA_SUM_INDEX)] = cluster_alpha_sum[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, ALPHA_INDEX)] = cluster_alpha[i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, PREMULTIPLIED_R_INDEX)] = cluster_premultiplied_r[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, PREMULTIPLIED_G_INDEX)] = cluster_premultiplied_g[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, PREMULTIPLIED_B_INDEX)] = cluster_premultiplied_b[
+				i * width * height + pixel_index];
 		}
+		pixel_cluster_data[UNINITIALIZED_CLUSTER_INDEX_INDEX] = cluster_uninitialized_cluster_index[pixel_index];
 	}
 
 	// Iterate over hit splats if this pixel is in bounds.
@@ -449,8 +462,20 @@ skm_cluster_passCUDA(const int starting_splat_index, const int P, const int widt
 
 	// Write to cluster data.
 	n_contrib[pixel_index] = contributing_splat_count;
-	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i)
-		cluster_data[CLUSTERS_AT_PIXEL(pixel_index) + i] = pixel_cluster_data[i];
+
+	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
+		cluster_depth[i * width * height + pixel_index] = pixel_cluster_data[DATA_IN_CLUSTER(i, DEPTH_INDEX)];
+		cluster_splat_count[i * width * height + pixel_index] = static_cast<int>(pixel_cluster_data[
+			DATA_IN_CLUSTER(i, SPLAT_COUNT_INDEX)]);
+		cluster_alpha_sum[i * width * height + pixel_index] = pixel_cluster_data[DATA_IN_CLUSTER(i, ALPHA_SUM_INDEX)];
+		cluster_alpha[i * width * height + pixel_index] = pixel_cluster_data[DATA_IN_CLUSTER(i, ALPHA_INDEX)];
+		cluster_premultiplied_r[i * width * height + pixel_index] = pixel_cluster_data[DATA_IN_CLUSTER(
+			i, PREMULTIPLIED_R_INDEX)];
+		cluster_premultiplied_g[i * width * height + pixel_index] = pixel_cluster_data[DATA_IN_CLUSTER(
+			i, PREMULTIPLIED_G_INDEX)];
+		cluster_premultiplied_b[i * width * height + pixel_index] = pixel_cluster_data[DATA_IN_CLUSTER(
+			i, PREMULTIPLIED_B_INDEX)];
+	}
 }
 
 template<uint32_t CHANNELS>
@@ -584,14 +609,15 @@ void FORWARD::skm_cluster_pass(dim3 grid_size, dim3 block_size, const int starti
                                int *cluster_splat_count, float
                                *cluster_alpha_sum, float *cluster_alpha, float *cluster_premultiplied_r,
                                float *cluster_premultiplied_g, float *
-                               cluster_premultiplied_b) {
+                               cluster_premultiplied_b, int *cluster_uninitialized_cluster_index) {
 	skm_cluster_passCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(starting_splat_index, P, width, height, grid_size,
 	                                                               radii,
 	                                                               means_2d, conic_opacity, depths, features, n_contrib,
 	                                                               cluster_depth, cluster_splat_count,
 	                                                               cluster_alpha_sum, cluster_alpha,
 	                                                               cluster_premultiplied_r, cluster_premultiplied_g,
-	                                                               cluster_premultiplied_b);
+	                                                               cluster_premultiplied_b,
+	                                                               cluster_uninitialized_cluster_index);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -649,5 +675,3 @@ void FORWARD::preprocess(int P, int D, int M,
 		antialiasing
 		);
 }
-
-

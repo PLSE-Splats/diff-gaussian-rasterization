@@ -273,6 +273,9 @@ int CudaRasterizer::Rasterizer::forward(
 	float *d_cluster_premultiplied_b;
 	CHECK_CUDA(cudaMalloc(&d_cluster_premultiplied_b, width * height * NUMBER_OF_CLUSTERS * sizeof(float)), debug);
 
+	int *d_uninitialized_cluster_index;
+	CHECK_CUDA(cudaMalloc(&d_uninitialized_cluster_index, width * height * sizeof(int)), debug);
+
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -309,7 +312,7 @@ int CudaRasterizer::Rasterizer::forward(
 			FORWARD::skm_cluster_pass(tile_grid, block, starting_splat_index, P, width, height, radii, geomState.means2D,
 				geomState.conic_opacity, geomState.depths, features, imgState.n_contrib, d_cluster_depth,
 				d_cluster_splat_count, d_cluster_alpha_sum,d_cluster_alpha, d_cluster_premultiplied_r,
-				d_cluster_premultiplied_g, d_cluster_premultiplied_b), debug);
+				d_cluster_premultiplied_g, d_cluster_premultiplied_b,d_uninitialized_cluster_index), debug);
 	}
 
 	// Render clustered Gaussians.
@@ -327,6 +330,7 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(cudaFree(d_cluster_premultiplied_r), debug);
 	CHECK_CUDA(cudaFree(d_cluster_premultiplied_g), debug);
 	CHECK_CUDA(cudaFree(d_cluster_premultiplied_b), debug);
+	CHECK_CUDA(cudaFree(d_uninitialized_cluster_index), debug);
 
 	// FIXME: This used to be num_rendered, a computed value for the total number of splat-tile pairs passed for rendering.
 	return P;

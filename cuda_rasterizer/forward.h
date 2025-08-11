@@ -90,6 +90,7 @@ namespace FORWARD
 	 * @param cluster_premultiplied_r Alpha premultiplied red value for each cluster.
 	 * @param cluster_premultiplied_g Alpha premultiplied green value for each cluster.
 	 * @param cluster_premultiplied_b Alpha premultiplied blue value for each cluster.
+	 * @param cluster_uninitialized_cluster_index Index of the first uninitialized cluster for each pixel.
 	 */
 	void skm_cluster_pass(
 		dim3 grid_size,
@@ -110,7 +111,7 @@ namespace FORWARD
 		float *cluster_alpha,
 		float *cluster_premultiplied_r,
 		float *cluster_premultiplied_g,
-		float *cluster_premultiplied_b
+		float *cluster_premultiplied_b, int *cluster_uninitialized_cluster_index
 	);
 
 	/**
