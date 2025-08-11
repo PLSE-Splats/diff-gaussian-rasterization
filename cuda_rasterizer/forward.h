@@ -20,7 +20,7 @@
 
 // SKM parameters.
 #define NUMBER_OF_CLUSTERS 8
-#define INGEST_SIZE 1750
+#define INGEST_SIZE 4096
 // FIXME: Assumes channels is always 3.
 #define NUMBER_OF_DATA_POINTS 7
 
