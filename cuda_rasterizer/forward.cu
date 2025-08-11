@@ -275,7 +275,9 @@ template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 skm_cluster_passCUDA(const int starting_splat_index, const int P, const int width, const int height, const dim3 grid_size,
                 const int *radii, const float2 *means2d, const float4 *conic_opacity, const float *depths,
-                const float *features, uint32_t *n_contrib, float *cluster_data) {
+                const float *features, uint32_t *n_contrib, float *cluster_depth, int *cluster_splat_count, float
+                *cluster_alpha_sum, float *cluster_alpha, float *cluster_premultiplied_r,
+                float *cluster_premultiplied_g, float *cluster_premultiplied_b) {
 	// Gather thread information.
 	const auto block = cg::this_thread_block();
 	const auto group_index = block.group_index();
@@ -456,7 +458,13 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 cluster_renderCUDA(
 	const int width,
 	const int height,
-	const float * __restrict__ cluster_data,
+	const float * __restrict__ cluster_depth,
+	const int * __restrict__ cluster_splat_count,
+	const float * __restrict__ cluster_alpha_sum,
+	const float * __restrict__ cluster_alpha,
+	const float * __restrict__ cluster_premultiplied_r,
+	const float * __restrict__ cluster_premultiplied_g,
+	const float * __restrict__ cluster_premultiplied_b,
 	const float * __restrict__ bg_color,
 	float * __restrict__ final_transmittance,
 	float * __restrict__ invdepth,
@@ -557,18 +565,33 @@ cluster_renderCUDA(
 }
 
 void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width, const int height,
-                             const float *cluster_data, const float *bg_color, float *final_transmittance,
+                             const float *cluster_depth, const int *cluster_splat_count, const float
+                             *cluster_alpha_sum, const float *cluster_alpha, const float *cluster_premultiplied_r,
+                             const float *cluster_premultiplied_g, const float *
+                             cluster_premultiplied_b, const float *bg_color, float *final_transmittance,
                              float *invdepth, float *out_color) {
-	cluster_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, cluster_data, bg_color,
+	cluster_renderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(width, height, cluster_depth, cluster_splat_count,
+	                                                             cluster_alpha_sum, cluster_alpha,
+	                                                             cluster_premultiplied_r, cluster_premultiplied_g,
+	                                                             cluster_premultiplied_b, bg_color,
 	                                                             final_transmittance, invdepth, out_color);
 }
 
-void FORWARD::skm_cluster_pass(dim3 grid_size, dim3 block_size, const int starting_splat_index, const int P, const int width,
-                          const int height, const int *radii, const float2 *means_2d, const float4 *conic_opacity,
-                          const float *depths, const float *features, uint32_t *n_contrib, float *cluster_data) {
-	skm_cluster_passCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(starting_splat_index, P, width, height, grid_size, radii,
-	                                                          means_2d, conic_opacity, depths, features, n_contrib,
-	                                                          cluster_data);
+void FORWARD::skm_cluster_pass(dim3 grid_size, dim3 block_size, const int starting_splat_index, const int P, const int
+                               width,
+                               const int height, const int *radii, const float2 *means_2d, const float4 *conic_opacity,
+                               const float *depths, const float *features, uint32_t *n_contrib, float *cluster_depth,
+                               int *cluster_splat_count, float
+                               *cluster_alpha_sum, float *cluster_alpha, float *cluster_premultiplied_r,
+                               float *cluster_premultiplied_g, float *
+                               cluster_premultiplied_b) {
+	skm_cluster_passCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(starting_splat_index, P, width, height, grid_size,
+	                                                               radii,
+	                                                               means_2d, conic_opacity, depths, features, n_contrib,
+	                                                               cluster_depth, cluster_splat_count,
+	                                                               cluster_alpha_sum, cluster_alpha,
+	                                                               cluster_premultiplied_r, cluster_premultiplied_g,
+	                                                               cluster_premultiplied_b);
 }
 
 void FORWARD::preprocess(int P, int D, int M,

@@ -83,7 +83,13 @@ namespace FORWARD
 	 * @param depths Array of depth values for each Gaussian.
 	 * @param features Color features for each Gaussian.
 	 * @param n_contrib Array of number of gaussians that contribute to each pixel.
-	 * @param cluster_data Cluster data for each pixel in the image.
+	 * @param cluster_depth Depth of each cluster.
+	 * @param cluster_splat_count Number of splats in each cluster.
+	 * @param cluster_alpha_sum Sum of alpha values for each cluster.
+	 * @param cluster_alpha Alpha value for each cluster.
+	 * @param cluster_premultiplied_r Alpha premultiplied red value for each cluster.
+	 * @param cluster_premultiplied_g Alpha premultiplied green value for each cluster.
+	 * @param cluster_premultiplied_b Alpha premultiplied blue value for each cluster.
 	 */
 	void skm_cluster_pass(
 		dim3 grid_size,
@@ -97,7 +103,14 @@ namespace FORWARD
 		const float4 *conic_opacity,
 		const float *depths,
 		const float *features,
-		uint32_t *n_contrib, float *cluster_data
+		uint32_t *n_contrib,
+		float *cluster_depth,
+		int *cluster_splat_count,
+		float *cluster_alpha_sum,
+		float *cluster_alpha,
+		float *cluster_premultiplied_r,
+		float *cluster_premultiplied_g,
+		float *cluster_premultiplied_b
 	);
 
 	/**
@@ -107,7 +120,13 @@ namespace FORWARD
 	 * @param block_size Number of threads per block (size of a tile).
 	 * @param width Image width.
 	 * @param height Image height.
-	 * @param cluster_data Cluster data for each pixel in the image.
+	 * @param cluster_depth Depth of each cluster.
+	 * @param cluster_splat_count Number of splats in each cluster.
+	 * @param cluster_alpha_sum Sum of alpha values for each cluster.
+	 * @param cluster_alpha Alpha value for each cluster.
+	 * @param cluster_premultiplied_r Alpha premultiplied red value for each cluster.
+	 * @param cluster_premultiplied_g Alpha premultiplied green value for each cluster.
+	 * @param cluster_premultiplied_b Alpha premultiplied blue value for each cluster.
 	 * @param bg_color Background color for the image.
 	 * @param final_transmittance Final transmittance values for each pixel in the image.
 	 * @param invdepth
@@ -118,7 +137,13 @@ namespace FORWARD
 		dim3 block_size,
 		int width,
 		int height,
-		const float *cluster_data,
+		const float *cluster_depth,
+		const int *cluster_splat_count,
+		const float *cluster_alpha_sum,
+		const float *cluster_alpha,
+		const float *cluster_premultiplied_r,
+		const float *cluster_premultiplied_g,
+		const float *cluster_premultiplied_b,
 		const float *bg_color,
 		float *final_transmittance,
 		float *invdepth, float *out_color
