@@ -516,9 +516,20 @@ cluster_renderCUDA(
 
 	// Fetch this pixel's cluster data.
 	float pixel_cluster_data[CLUSTER_DATA_LENGTH];
-	for (int i = 0; i < CLUSTER_DATA_LENGTH; ++i) {
-		pixel_cluster_data[i] = cluster_data[CLUSTERS_AT_PIXEL(pixel_index) + i];
-	}
+		for (int i = 0; i < NUMBER_OF_CLUSTERS; ++i) {
+			pixel_cluster_data[DATA_IN_CLUSTER(i, DEPTH_INDEX)] = cluster_depth[i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, SPLAT_COUNT_INDEX)] = cluster_splat_count[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, ALPHA_SUM_INDEX)] = cluster_alpha_sum[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, ALPHA_INDEX)] = cluster_alpha[i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, PREMULTIPLIED_R_INDEX)] = cluster_premultiplied_r[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, PREMULTIPLIED_G_INDEX)] = cluster_premultiplied_g[
+				i * width * height + pixel_index];
+			pixel_cluster_data[DATA_IN_CLUSTER(i, PREMULTIPLIED_B_INDEX)] = cluster_premultiplied_b[
+				i * width * height + pixel_index];
+		}
 
 	// For each cluster, convert transmittance to alpha and compute the final RGB values.
 	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
@@ -558,23 +569,23 @@ cluster_renderCUDA(
 		last_minimum_depth = current_minimum_depth;
 
 		// Get cluster data.
-		const float cluster_alpha = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_INDEX)];
+		const float cluster_alpha_value = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, ALPHA_INDEX)];
 		const float cluster_r = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_R_INDEX)];
 		const float cluster_g = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_G_INDEX)];
 		const float cluster_b = pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, PREMULTIPLIED_B_INDEX)];
 
 		// Contribute the cluster to the final output color.
-		pixel_color[0] += cluster_alpha * cluster_r * pixel_transmittance;
-		pixel_color[1] += cluster_alpha * cluster_g * pixel_transmittance;
-		pixel_color[2] += cluster_alpha * cluster_b * pixel_transmittance;
+		pixel_color[0] += cluster_alpha_value * cluster_r * pixel_transmittance;
+		pixel_color[1] += cluster_alpha_value * cluster_g * pixel_transmittance;
+		pixel_color[2] += cluster_alpha_value * cluster_b * pixel_transmittance;
 
 		// Update invdepth.
 		if (invdepth)
-			expected_invdepth += 1 / pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, DEPTH_INDEX)] * cluster_alpha *
+			expected_invdepth += 1 / pixel_cluster_data[DATA_IN_CLUSTER(target_cluster_index, DEPTH_INDEX)] * cluster_alpha_value *
 					pixel_transmittance;
 
 		// Update the transmittance.
-		pixel_transmittance *= 1 - min(1.0f, cluster_alpha);
+		pixel_transmittance *= 1 - min(1.0f, cluster_alpha_value);
 	}
 
 	// Write to output buffers.
