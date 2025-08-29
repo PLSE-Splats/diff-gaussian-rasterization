@@ -279,6 +279,46 @@ int CudaRasterizer::Rasterizer::forward(
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
 	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
 
+	// Copy tiles_touched out into a host vector for inspection or further processing
+	std::vector<int> host_tiles_touched(P);
+	CHECK_CUDA(cudaMemcpy(host_tiles_touched.data(), geomState.tiles_touched, P * sizeof(int), cudaMemcpyDeviceToHost), debug);
+
+	// Get the maximum value in host_tiles_touched
+	int max_tiles_touched = 0;
+	if (!host_tiles_touched.empty()) {
+		max_tiles_touched = *std::max_element(host_tiles_touched.begin(), host_tiles_touched.end());
+	}
+
+	// Histogram binning: 16 bins using a logarithmic scale from 0 to max_tiles_touched (inclusive)
+	const int num_bins = 16;
+	std::vector<int> histogram(num_bins, 0);
+	double log_min = 0.0; // log(1)
+	double log_max = std::log((double)max_tiles_touched + 1.0); // log(max+1)
+	if (max_tiles_touched > 0) {
+		for (int v : host_tiles_touched) {
+			int bin = 0;
+			if (v > 0) {
+				double log_v = std::log((double)v + 1.0);
+				bin = (int)((log_v - log_min) / (log_max - log_min) * (num_bins - 1) + 1e-8); // 0 to num_bins-1
+				if (bin > num_bins - 1) bin = num_bins - 1;
+				if (bin < 0) bin = 0;
+			}
+			histogram[bin]++;
+		}
+	} else {
+		// All values are zero, put all in the first bin
+		histogram[0] = static_cast<int>(host_tiles_touched.size());
+	}
+	// Print the bin value ranges and counts (logarithmic scale)
+	for (int i = 0; i < num_bins; ++i) {
+		int range_start = (int)std::round(std::exp((log_max - log_min) * i / num_bins + log_min) - 1.0);
+		int range_end = (int)std::round(std::exp((log_max - log_min) * (i + 1) / num_bins + log_min) - 1.0) - 1;
+		if (i == num_bins - 1) range_end = max_tiles_touched; // ensure last bin includes max
+		if (range_start < 0) range_start = 0;
+		if (range_end < range_start) range_end = range_start;
+		std::cout << "Bin [" << range_start << ", " << range_end << "]: " << histogram[i] << std::endl;
+	}
+
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
 	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
