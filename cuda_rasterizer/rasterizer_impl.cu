@@ -65,45 +65,36 @@ __global__ void checkFrustum(int P,
 	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, false, p_view);
 }
 
-// Generates one key/value pair for all Gaussian / tile overlaps. 
-// Run once per Gaussian (1:N mapping).
+// Populate tile-splat key-value buffers for tile-group-by sorting.
+// Run once per Gaussian (1:P mapping).
 __global__ void duplicateWithKeys(
-	int P,
+	const int P,
 	const float2* points_xy,
-	const float* depths,
-	const uint32_t* offsets,
-	uint64_t* gaussian_keys_unsorted,
-	uint32_t* gaussian_values_unsorted,
-	int* radii,
-	dim3 grid)
-{
-	auto idx = cg::this_grid().thread_rank();
-	if (idx >= P)
+	const uint32_t *tiles_per_splat_offsets,
+	uint16_t *tile_id_unsorted,
+	uint32_t *splat_id_unsorted,
+	const int *splat_radii,
+	const dim3 tile_grid) {
+	const auto splat_id = cg::this_grid().thread_rank();
+
+	// Skip out-of-bounds threads.
+	if (splat_id >= P)
 		return;
 
-	// Generate no key/value pair for invisible Gaussians
-	if (radii[idx] > 0)
-	{
-		// Find this Gaussian's offset in buffer for writing keys/values.
-		uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
+	// Generate no key/value pair for invisible splats.
+	if (splat_radii[splat_id] > 0) {
+		// Find this splat's offset in buffer for writing.
+		uint32_t off = splat_id == 0 ? 0 : tiles_per_splat_offsets[splat_id - 1];
 		uint2 rect_min, rect_max;
 
-		getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
+		// Compute bounding rect of splat in tile space.
+		getRect(points_xy[splat_id], splat_radii[splat_id], rect_min, rect_max, tile_grid);
 
-		// For each tile that the bounding rect overlaps, emit a 
-		// key/value pair. The key is |  tile ID  |      depth      |,
-		// and the value is the ID of the Gaussian. Sorting the values 
-		// with this key yields Gaussian IDs in a list, such that they
-		// are first sorted by tile and then by depth. 
-		for (int y = rect_min.y; y < rect_max.y; y++)
-		{
-			for (int x = rect_min.x; x < rect_max.x; x++)
-			{
-				uint64_t key = y * grid.x + x;
-				key <<= 32;
-				key |= *((uint32_t*)&depths[idx]);
-				gaussian_keys_unsorted[off] = key;
-				gaussian_values_unsorted[off] = idx;
+		// For each tile that the bounding rect overlaps, write its tile ID and splat ID to the buffers.
+		for (unsigned int y = rect_min.y; y < rect_max.y; y++) {
+			for (unsigned int x = rect_min.x; x < rect_max.x; x++) {
+				tile_id_unsorted[off] = y * tile_grid.x + x;
+				splat_id_unsorted[off] = splat_id;
 				off++;
 			}
 		}
@@ -283,6 +274,15 @@ int CudaRasterizer::Rasterizer::forward(
 	int num_rendered;
 	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
 
+	// Allocate space for unsorted keys/values, sorted keys/values.
+	uint16_t *d_unsorted_tile_ids, *d_sorted_tile_ids;
+	CHECK_CUDA(cudaMalloc(&d_unsorted_tile_ids, num_rendered * sizeof(uint16_t)), debug)
+	CHECK_CUDA(cudaMalloc(&d_sorted_tile_ids, num_rendered * sizeof(uint16_t)), debug)
+
+	uint32_t *d_unsorted_splat_ids, *d_sorted_splat_ids;
+	CHECK_CUDA(cudaMalloc(&d_unsorted_splat_ids, num_rendered * sizeof(uint32_t)), debug)
+	CHECK_CUDA(cudaMalloc(&d_sorted_splat_ids, num_rendered * sizeof(uint32_t)), debug)
+
 	size_t binning_chunk_size = required<BinningState>(num_rendered);
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
 	BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
@@ -292,10 +292,9 @@ int CudaRasterizer::Rasterizer::forward(
 	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
 		P,
 		geomState.means2D,
-		geomState.depths,
 		geomState.point_offsets,
-		binningState.point_list_keys_unsorted,
-		binningState.point_list_unsorted,
+		d_unsorted_tile_ids,
+		d_unsorted_splat_ids,
 		radii,
 		tile_grid)
 	CHECK_CUDA(, debug)
