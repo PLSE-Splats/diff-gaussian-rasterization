@@ -101,31 +101,30 @@ __global__ void duplicateWithKeys(
 	}
 }
 
-// Check keys to see if it is at the start/end of one tile's range in 
-// the full sorted list. If yes, write start/end of this tile. 
-// Run once per instanced (duplicated) Gaussian ID.
-__global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* ranges)
+// Calculate the start and end of each tile's range of splats.
+__global__ void identifyTileRanges(const int L, const uint16_t* sorted_tile_ids, ushort2* ranges)
 {
-	auto idx = cg::this_grid().thread_rank();
-	if (idx >= L)
+	const auto tile_splat_pair_index = cg::this_grid().thread_rank();
+	
+	// Skip out-of-bounds pairs.
+	if (tile_splat_pair_index >= L)
 		return;
 
-	// Read tile ID from key. Update start/end of tile range if at limit.
-	uint64_t key = point_list_keys[idx];
-	uint32_t currtile = key >> 32;
-	if (idx == 0)
-		ranges[currtile].x = 0;
+	// Read tile ID. Update start/end of tile range if at limit.
+	const uint16_t tile_id = sorted_tile_ids[tile_splat_pair_index];
+	if (tile_splat_pair_index == 0)
+		ranges[tile_id].x = 0;
 	else
 	{
-		uint32_t prevtile = point_list_keys[idx - 1] >> 32;
-		if (currtile != prevtile)
+		uint16_t previous_tile = sorted_tile_ids[tile_splat_pair_index - 1];
+		if (tile_id != previous_tile)
 		{
-			ranges[prevtile].y = idx;
-			ranges[currtile].x = idx;
+			ranges[previous_tile].y = tile_splat_pair_index;
+			ranges[tile_id].x = tile_splat_pair_index;
 		}
 	}
-	if (idx == L - 1)
-		ranges[currtile].y = L;
+	if (tile_splat_pair_index == L - 1)
+		ranges[tile_id].y = L;
 }
 
 // Mark Gaussians as visible/invisible, based on view frustum testing
@@ -228,9 +227,9 @@ int CudaRasterizer::Rasterizer::forward(
 	dim3 block(BLOCK_X, BLOCK_Y, 1);
 
 	// Dynamically resize image-based auxiliary buffers during training
-	size_t img_chunk_size = required<ImageState>(width * height);
-	char* img_chunkptr = imageBuffer(img_chunk_size);
-	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
+	// size_t img_chunk_size = required<ImageState>(width * height);
+	// char* img_chunkptr = imageBuffer(img_chunk_size);
+	// ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 
 	if (NUM_CHANNELS != 3 && colors_precomp == nullptr)
 	{
@@ -283,12 +282,7 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(cudaMalloc(&d_unsorted_splat_ids, num_rendered * sizeof(uint32_t)), debug)
 	CHECK_CUDA(cudaMalloc(&d_sorted_splat_ids, num_rendered * sizeof(uint32_t)), debug)
 
-	size_t binning_chunk_size = required<BinningState>(num_rendered);
-	char* binning_chunkptr = binningBuffer(binning_chunk_size);
-	BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
-
-	// For each instance to be rendered, produce adequate [ tile | depth ] key 
-	// and corresponding dublicated Gaussian indices to be sorted
+	// Populate unsorted key/value buffers with tile IDs and splat IDs.
 	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
 		P,
 		geomState.means2D,
@@ -299,42 +293,57 @@ int CudaRasterizer::Rasterizer::forward(
 		tile_grid)
 	CHECK_CUDA(, debug)
 
-	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
+	// Sort by tile ID.
+	void *d_temp_storage = nullptr;
+	size_t temp_storage_bytes = 0;
+	CHECK_CUDA(
+		cub::DeviceRadixSort::SortPairs(
+			d_temp_storage, temp_storage_bytes,
+			d_unsorted_tile_ids, d_sorted_tile_ids,
+			d_unsorted_splat_ids, d_sorted_splat_ids,
+			num_rendered),
+		debug);
 
-	// Sort complete list of (duplicated) Gaussian indices by keys
-	CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
-		binningState.list_sorting_space,
-		binningState.sorting_size,
-		binningState.point_list_keys_unsorted, binningState.point_list_keys,
-		binningState.point_list_unsorted, binningState.point_list,
-		num_rendered, 0, 32 + bit), debug)
+	CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes), debug);
 
-	CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
+	CHECK_CUDA(
+		cub::DeviceRadixSort::SortPairs(
+			d_temp_storage, temp_storage_bytes,
+			d_unsorted_tile_ids, d_sorted_tile_ids,
+			d_unsorted_splat_ids, d_sorted_splat_ids,
+			num_rendered),
+		debug);
+
+
 
 	// Identify start and end of per-tile workloads in sorted list
+	ushort2 *d_tile_ranges;
+	CHECK_CUDA(cudaMalloc(&d_tile_ranges, tile_grid.x * tile_grid.y * sizeof(ushort2)), debug)
+	CHECK_CUDA(cudaMemset(d_tile_ranges, 0, tile_grid.x * tile_grid.y * sizeof(ushort2)), debug);
+
 	if (num_rendered > 0)
 		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
 			num_rendered,
-			binningState.point_list_keys,
-			imgState.ranges);
+			d_sorted_tile_ids,
+			d_tile_ranges);
 	CHECK_CUDA(, debug)
 
-	// Let each tile blend its range of Gaussians independently in parallel
-	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-	CHECK_CUDA(FORWARD::render(
-		tile_grid, block,
-		imgState.ranges,
-		binningState.point_list,
-		width, height,
-		geomState.means2D,
-		feature_ptr,
-		geomState.conic_opacity,
-		imgState.accum_alpha,
-		imgState.n_contrib,
-		background,
-		out_color,
-		geomState.depths,
-		depth), debug)
+	// // Let each tile blend its range of Gaussians independently in parallel
+	// const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	// CHECK_CUDA(FORWARD::render(
+	// 	tile_grid, block,
+	// 	imgState.ranges,
+	// 	binningState.point_list,
+	// 	width, height,
+	// 	geomState.means2D,
+	// 	feature_ptr,
+	// 	geomState.conic_opacity,
+	// 	imgState.accum_alpha,
+	// 	imgState.n_contrib,
+	// 	background,
+	// 	out_color,
+	// 	geomState.depths,
+	// 	depth), debug)
 
 	return num_rendered;
 }
