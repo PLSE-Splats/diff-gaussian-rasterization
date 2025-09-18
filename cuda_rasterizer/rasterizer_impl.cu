@@ -283,7 +283,7 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(cudaMalloc(&d_sorted_splat_ids, num_rendered * sizeof(uint32_t)), debug)
 
 	// Populate unsorted key/value buffers with tile IDs and splat IDs.
-	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
+	duplicateWithKeys << <(P + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE >> > (
 		P,
 		geomState.means2D,
 		geomState.point_offsets,
@@ -314,8 +314,6 @@ int CudaRasterizer::Rasterizer::forward(
 			num_rendered),
 		debug);
 
-
-
 	// Identify start and end of per-tile workloads in sorted list
 	ushort2 *d_tile_ranges;
 	CHECK_CUDA(cudaMalloc(&d_tile_ranges, tile_grid.x * tile_grid.y * sizeof(ushort2)), debug)
@@ -327,6 +325,10 @@ int CudaRasterizer::Rasterizer::forward(
 			d_sorted_tile_ids,
 			d_tile_ranges);
 	CHECK_CUDA(, debug)
+
+	// Cluster.
+
+	// Render.
 
 	// // Let each tile blend its range of Gaussians independently in parallel
 	// const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
