@@ -268,6 +268,26 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
 
+template<uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+clusterCUDA(
+	const int width,
+	const int height,
+	const dim3 grid_size,
+	const int *radii,
+	const float2 *means_2d,
+	const float4 *conic_opacity,
+	const float *depths,
+	const float *features,
+	uint32_t *n_contrib,
+	__half *cluster_depth,
+	__half *cluster_alpha,
+	__half *cluster_r,
+	__half *cluster_g,
+	__half *cluster_b
+) {
+}
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -426,33 +446,67 @@ void FORWARD::render(
 		depth);
 }
 
+void FORWARD::cluster(
+	dim3 grid_size,
+	dim3 block_size,
+	int width,
+	int height,
+	const int *radii,
+	const float2 *means_2d,
+	const float4 *conic_opacity,
+	const float *depths,
+	const float *features,
+	uint32_t *n_contrib,
+	__half *cluster_depth,
+	__half *cluster_alpha,
+	__half *cluster_r,
+	__half *cluster_g,
+	__half *cluster_b
+) {
+	clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
+		width,
+		height,
+		grid_size,
+		radii,
+		means_2d,
+		conic_opacity,
+		depths,
+		features,
+		n_contrib,
+		cluster_depth,
+		cluster_alpha,
+		cluster_r,
+		cluster_g,
+		cluster_b
+	);
+}
+
 void FORWARD::preprocess(int P, int D, int M,
-	const float* means3D,
-	const glm::vec3* scales,
-	const float scale_modifier,
-	const glm::vec4* rotations,
-	const float* opacities,
-	const float* shs,
-	bool* clamped,
-	const float* cov3D_precomp,
-	const float* colors_precomp,
-	const float* viewmatrix,
-	const float* projmatrix,
-	const glm::vec3* cam_pos,
-	const int W, int H,
-	const float focal_x, float focal_y,
-	const float tan_fovx, float tan_fovy,
-	int* radii,
-	float2* means2D,
-	float* depths,
-	float* cov3Ds,
-	float* rgb,
-	float4* conic_opacity,
-	const dim3 grid,
-	uint32_t* tiles_touched,
-	bool prefiltered,
-	bool antialiasing)
-{
+                         const float *means3D,
+                         const glm::vec3 *scales,
+                         const float scale_modifier,
+                         const glm::vec4 *rotations,
+                         const float *opacities,
+                         const float *shs,
+                         bool *clamped,
+                         const float *cov3D_precomp,
+                         const float *colors_precomp,
+                         const float *viewmatrix,
+                         const float *projmatrix,
+                         const glm::vec3 *cam_pos,
+                         const int W, int H,
+                         const float focal_x, float focal_y,
+                         const float tan_fovx, float tan_fovy,
+                         int *radii,
+                         float2 *means2D,
+                         float *depths,
+                         float *cov3Ds,
+                         float *rgb,
+                         float4 *conic_opacity,
+                         const dim3 grid,
+                         uint32_t *tiles_touched,
+                         bool prefiltered,
+                         bool antialiasing) {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
 		means3D,

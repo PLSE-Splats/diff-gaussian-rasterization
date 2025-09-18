@@ -327,6 +327,7 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(, debug)
 
 	// Cluster.
+	
 
 	// Render.
 
