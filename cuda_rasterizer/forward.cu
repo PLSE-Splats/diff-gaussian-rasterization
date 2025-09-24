@@ -275,7 +275,7 @@ clusterCUDA(
 	const int height,
 	const dim3 grid_size,
 	const uint32_t *splat_ids,
-	const ushort2 *tile_ranges,
+	const ushort2 *splat_id_ranges,
 	const int *radii,
 	const float2 *means_2d,
 	const float4 *conic_opacity,
@@ -288,6 +288,27 @@ clusterCUDA(
 	__half *cluster_greens,
 	__half *cluster_blues
 ) {
+	// Gather thread information.
+	const auto block = cg::this_thread_block();
+	const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
+	const auto group_index = block.group_index();
+	const auto thread_index = block.thread_index();
+	const auto thread_rank = block.thread_rank();
+
+	// Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+	// Compute if this thread is associated with a visible pixel.
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+	// Load input range for this tile.
+	const auto splat_id_range = splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
+	const uint32_t todo = splat_id_range.y - splat_id_range.x;
+	const uint32_t rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -453,6 +474,8 @@ void FORWARD::cluster(
 	dim3 block_size,
 	int width,
 	int height,
+	const uint32_t *splat_ids,
+	const ushort2 *splat_id_ranges,
 	const int *radii,
 	const float2 *means_2d,
 	const float4 *conic_opacity,
@@ -469,6 +492,8 @@ void FORWARD::cluster(
 		width,
 		height,
 		grid_size,
+		splat_ids,
+		splat_id_ranges,
 		radii,
 		means_2d,
 		conic_opacity,

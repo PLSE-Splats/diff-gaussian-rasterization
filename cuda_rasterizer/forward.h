@@ -61,7 +61,7 @@ namespace FORWARD
 	 * @param width Image width.
 	 * @param height Image height.
 	 * @param splat_ids List of splat indices per tile.
-	 * @param tile_ranges Index ranges in splat list for each tile.
+	 * @param splat_id_ranges Index ranges in splat list for each tile.
 	 * @param radii Input radii of each splat.
 	 * @param means_2d Input 2D means of each splat.
 	 * @param conic_opacities Input conic opacity of each splat.
@@ -79,8 +79,8 @@ namespace FORWARD
 		dim3 block_size,
 		int width,
 		int height,
-		uint32_t *splat_ids,
-		ushort2 *tile_ranges,
+		const uint32_t *splat_ids,
+		const ushort2 *splat_id_ranges,
 		const int *radii,
 		const float2 *means_2d,
 		const float4 *conic_opacities,
