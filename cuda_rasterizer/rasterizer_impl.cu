@@ -320,31 +320,47 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(cudaMemset(d_tile_ranges, 0, tile_grid.x * tile_grid.y * sizeof(ushort2)), debug);
 
 	if (num_rendered > 0)
-		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
+		identifyTileRanges <<<(num_rendered + 255) / 256, 256>>>(
 			num_rendered,
 			d_sorted_tile_ids,
 			d_tile_ranges);
 	CHECK_CUDA(, debug)
 
 	// Allocate clustering frame buffer.
-	__half *d_cluster_depth;
-	__half *d_cluster_alpha;
-	__half *d_cluster_r;
-	__half *d_cluster_g;
-	__half *d_cluster_b;
+	__half *d_cluster_depths;
+	__half *d_cluster_alphas;
+	__half *d_cluster_reds;
+	__half *d_cluster_greens;
+	__half *d_cluster_blues;
 
-	CHECK_CUDA(cudaMalloc(&d_cluster_depth, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_alpha, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_r, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_g, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_b, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_depths, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_alphas, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_reds, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_greens, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_blues, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
 
 	// Cluster.
 	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	CHECK_CUDA(
-		FORWARD::cluster(tile_grid, block, width, height, radii, geomState.means2D, geomState.conic_opacity, geomState.
-			depths, features, imgState.n_contrib, d_cluster_depth, d_cluster_alpha, d_cluster_r, d_cluster_g,
-			d_cluster_b), debug);
+		FORWARD::cluster(
+			tile_grid,
+			block,
+			width,
+			height,
+			d_sorted_splat_ids,
+			d_tile_ranges,
+			radii,
+			geomState.means2D,
+			geomState.conic_opacity,
+			geomState.depths,
+			features,
+			imgState.n_contrib,
+			d_cluster_depths,
+			d_cluster_alphas,
+			d_cluster_reds,
+			d_cluster_greens,
+			d_cluster_blues),
+		debug);
 
 	// Render.
 

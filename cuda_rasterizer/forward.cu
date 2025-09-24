@@ -274,17 +274,19 @@ clusterCUDA(
 	const int width,
 	const int height,
 	const dim3 grid_size,
+	const uint32_t *splat_ids,
+	const ushort2 *tile_ranges,
 	const int *radii,
 	const float2 *means_2d,
 	const float4 *conic_opacity,
 	const float *depths,
 	const float *features,
-	uint32_t *n_contrib,
-	__half *cluster_depth,
-	__half *cluster_alpha,
-	__half *cluster_r,
-	__half *cluster_g,
-	__half *cluster_b
+	uint32_t *n_contributions,
+	__half *cluster_depths,
+	__half *cluster_alphas,
+	__half *cluster_reds,
+	__half *cluster_greens,
+	__half *cluster_blues
 ) {
 }
 

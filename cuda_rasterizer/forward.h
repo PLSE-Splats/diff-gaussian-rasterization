@@ -60,34 +60,38 @@ namespace FORWARD
 	 * @param block_size Number of threads per block (size of a tile).
 	 * @param width Image width.
 	 * @param height Image height.
+	 * @param splat_ids List of splat indices per tile.
+	 * @param tile_ranges Index ranges in splat list for each tile.
 	 * @param radii Input radii of each splat.
 	 * @param means_2d Input 2D means of each splat.
-	 * @param conic_opacity Input conic opacity of each splat.
+	 * @param conic_opacities Input conic opacity of each splat.
 	 * @param depths Input depth of each splat.
 	 * @param features Input features of each splat (RGB).
-	 * @param n_contrib Output number of splats contributing to each pixel.
-	 * @param cluster_depth Output cluster depth.
-	 * @param cluster_alpha Output cluster alpha.
-	 * @param cluster_r Output cluster premultiplied red channel.
-	 * @param cluster_g Output cluster premultiplied green channel.
-	 * @param cluster_b Output cluster premultiplied blue channel.
+	 * @param n_contributions Output number of splats contributing to each pixel.
+	 * @param cluster_depths Output cluster depth.
+	 * @param cluster_alphas Output cluster alpha.
+	 * @param cluster_reds Output cluster premultiplied red channel.
+	 * @param cluster_greens Output cluster premultiplied green channel.
+	 * @param cluster_blues Output cluster premultiplied blue channel.
 	 */
 	void cluster(
 		dim3 grid_size,
 		dim3 block_size,
 		int width,
 		int height,
+		uint32_t *splat_ids,
+		ushort2 *tile_ranges,
 		const int *radii,
 		const float2 *means_2d,
-		const float4 *conic_opacity,
+		const float4 *conic_opacities,
 		const float *depths,
 		const float *features,
-		uint32_t *n_contrib,
-		__half *cluster_depth,
-		__half *cluster_alpha,
-		__half *cluster_r,
-		__half *cluster_g,
-		__half *cluster_b
+		uint32_t *n_contributions,
+		__half *cluster_depths,
+		__half *cluster_alphas,
+		__half *cluster_reds,
+		__half *cluster_greens,
+		__half *cluster_blues
 	);
 
 	// Main rasterization method.
