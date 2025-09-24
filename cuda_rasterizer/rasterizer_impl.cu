@@ -227,9 +227,9 @@ int CudaRasterizer::Rasterizer::forward(
 	dim3 block(BLOCK_X, BLOCK_Y, 1);
 
 	// Dynamically resize image-based auxiliary buffers during training
-	// size_t img_chunk_size = required<ImageState>(width * height);
-	// char* img_chunkptr = imageBuffer(img_chunk_size);
-	// ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
+	size_t img_chunk_size = required<ImageState>(width * height);
+	char *img_chunkptr = imageBuffer(img_chunk_size);
+	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 
 	if (NUM_CHANNELS != 3 && colors_precomp == nullptr)
 	{
@@ -326,8 +326,25 @@ int CudaRasterizer::Rasterizer::forward(
 			d_tile_ranges);
 	CHECK_CUDA(, debug)
 
+	// Allocate clustering frame buffer.
+	__half *d_cluster_depth;
+	__half *d_cluster_alpha;
+	__half *d_cluster_r;
+	__half *d_cluster_g;
+	__half *d_cluster_b;
+
+	CHECK_CUDA(cudaMalloc(&d_cluster_depth, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_alpha, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_r, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_g, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_b, width*height*NUMBER_OF_CLUSTERS*sizeof(__half)), debug);
+
 	// Cluster.
-	
+	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	CHECK_CUDA(
+		FORWARD::cluster(tile_grid, block, width, height, radii, geomState.means2D, geomState.conic_opacity, geomState.
+			depths, features, imgState.n_contrib, d_cluster_depth, d_cluster_alpha, d_cluster_r, d_cluster_g,
+			d_cluster_b), debug);
 
 	// Render.
 
