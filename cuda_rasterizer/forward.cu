@@ -372,6 +372,31 @@ clusterCUDA(
 			const float sample_r = features[sample_splat_id * CHANNELS + 0];
 			const float sample_g = features[sample_splat_id * CHANNELS + 1];
 			const float sample_b = features[sample_splat_id * CHANNELS + 2];
+
+			// Pick a target cluster.
+			unsigned short target_cluster_index = 0;
+
+			// Use the next uninitialize cluster.
+			if (uninitialized_cluster_index < NUMBER_OF_CLUSTERS) {
+				for (int cluster_index = 0; cluster_index < uninitialized_cluster_index; ++cluster_index) {
+					// Use the cluster if it's an exact match.
+					if (__heq(cluster_depths[width * height * cluster_index + pixel_index], __float2half_rn(
+						          collected_splat_depths[j]))) {
+						target_cluster_index = cluster_index;
+						break;
+					}
+
+					// Use the uninitialized cluster if no prior exact matches were found
+					// and increment uninitialized index for the next pass.
+					if (cluster_index == uninitialized_cluster_index - 1) {
+						target_cluster_index = uninitialized_cluster_index;
+						uninitialized_cluster_index++;
+					}
+				}
+			}
+			// Clusters are initialized, use the closest in depth.
+			else {
+			}
 		}
 	}
 }
