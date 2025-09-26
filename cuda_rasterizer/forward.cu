@@ -304,11 +304,40 @@ clusterCUDA(
 
 	// Compute if this thread is associated with a visible pixel.
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
+	bool done = !pixel_in_bounds;
 
 	// Load input range for this tile.
 	const auto splat_id_range = splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
-	const uint32_t todo = splat_id_range.y - splat_id_range.x;
+	uint32_t todo = splat_id_range.y - splat_id_range.x;
 	const uint32_t rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+	// Allocate storage for batches of collectively fetched data.
+	__shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
+	__shared__ float2 collected_means_2d[BLOCK_SIZE];
+	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+
+	// Clustering helper variables.
+	uint32_t contributor = 0;
+	uint32_t last_contributor = 0;
+	float expected_invdepth = 0.0f;
+
+	// Iterate over batches until all done or range is complete.
+	for (unsigned short i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
+		// End early if the entire block is done clustering.
+		const int num_done = __syncthreads_count(done);
+		if (num_done == BLOCK_SIZE)
+			break;
+
+		// Collectively fetch per-splat data from global to shared.
+		const unsigned short progress = i * BLOCK_SIZE + thread_rank;
+		if (splat_id_range.x + progress < splat_id_range.y) {
+			const uint32_t collected_splat_id = splat_ids[splat_id_range.x + progress];
+			collected_splat_ids[thread_rank] = collected_splat_id;
+			collected_means_2d[thread_rank] = means_2d[collected_splat_id];
+			collected_conic_opacity[thread_rank] = conic_opacity[collected_splat_id];
+		}
+		block.sync();
+	}
 }
 
 // Main rasterization method. Collaboratively works on one tile per
