@@ -313,6 +313,7 @@ clusterCUDA(
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
+	__shared__ float collected_splat_depths[BLOCK_SIZE];
 	__shared__ float2 collected_means_2d[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 
@@ -320,6 +321,7 @@ clusterCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float expected_invdepth = 0.0f;
+	unsigned short uninitialized_cluster_index = 0;
 
 	// Iterate over batches until all done or range is complete.
 	for (unsigned short i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
@@ -333,10 +335,44 @@ clusterCUDA(
 		if (splat_id_range.x + progress < splat_id_range.y) {
 			const uint32_t collected_splat_id = splat_ids[splat_id_range.x + progress];
 			collected_splat_ids[thread_rank] = collected_splat_id;
+			collected_splat_depths[thread_rank] = depths[collected_splat_id];
 			collected_means_2d[thread_rank] = means_2d[collected_splat_id];
 			collected_conic_opacity[thread_rank] = conic_opacity[collected_splat_id];
 		}
 		block.sync();
+
+		// Iterate over current batch (per thread).
+		for (int j = 0; !done && j < min(BLOCK_SIZE, todo); ++j) {
+			// Collect sample ID.
+			const uint32_t sample_splat_id = collected_splat_ids[j];
+
+			// Keep track of current position in range.
+			contributor++;
+
+			// Compute splat alpha.
+
+			// Resample using conic matrix (cf. "Surface 
+			// Splatting" by Zwicker et al., 2001)
+			float2 xy = collected_means_2d[j];
+			float2 d = {xy.x - static_cast<float>(pixel_coordinate.x), xy.y - static_cast<float>(pixel_coordinate.y)};
+			float4 con_o = collected_conic_opacity[j];
+			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+			if (power > 0.0f)
+				continue;
+
+			// Eq. (2) from 3D Gaussian splatting paper.
+			// Obtain alpha by multiplying with Gaussian opacity
+			// and its exponential falloff from mean.
+			// Avoid numerical instabilities (see paper appendix). 
+			float alpha = min(0.99f, con_o.w * exp(power));
+			if (alpha < 1.0f / 255.0f)
+				continue;
+
+			// Collect color.
+			const float sample_r = features[sample_splat_id * CHANNELS + 0];
+			const float sample_g = features[sample_splat_id * CHANNELS + 1];
+			const float sample_b = features[sample_splat_id * CHANNELS + 2];
+		}
 	}
 }
 
