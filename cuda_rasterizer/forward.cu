@@ -313,7 +313,7 @@ clusterCUDA(
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
-	__shared__ float collected_splat_depths[BLOCK_SIZE];
+	__shared__ __half collected_splat_depths[BLOCK_SIZE];
 	__shared__ float2 collected_means_2d[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 
@@ -321,6 +321,13 @@ clusterCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float expected_invdepth = 0.0f;
+
+	// Local cluster data.
+	__half local_cluster_depths[NUMBER_OF_CLUSTERS];
+	__half local_cluster_alphas[NUMBER_OF_CLUSTERS];
+	__half local_cluster_reds[NUMBER_OF_CLUSTERS];
+	__half local_cluster_greens[NUMBER_OF_CLUSTERS];
+	__half local_cluster_blues[NUMBER_OF_CLUSTERS];
 	unsigned short uninitialized_cluster_index = 0;
 
 	// Iterate over batches until all done or range is complete.
@@ -335,7 +342,7 @@ clusterCUDA(
 		if (splat_id_range.x + progress < splat_id_range.y) {
 			const uint32_t collected_splat_id = splat_ids[splat_id_range.x + progress];
 			collected_splat_ids[thread_rank] = collected_splat_id;
-			collected_splat_depths[thread_rank] = depths[collected_splat_id];
+			collected_splat_depths[thread_rank] = __float2half(depths[collected_splat_id]);
 			collected_means_2d[thread_rank] = means_2d[collected_splat_id];
 			collected_conic_opacity[thread_rank] = conic_opacity[collected_splat_id];
 		}
@@ -380,8 +387,7 @@ clusterCUDA(
 			if (uninitialized_cluster_index < NUMBER_OF_CLUSTERS) {
 				for (int cluster_index = 0; cluster_index < uninitialized_cluster_index; ++cluster_index) {
 					// Use the cluster if it's an exact match.
-					if (__heq(cluster_depths[width * height * cluster_index + pixel_index], __float2half_rn(
-						          collected_splat_depths[j]))) {
+					if (__heq(local_cluster_depths[cluster_index], collected_splat_depths[j])) {
 						target_cluster_index = cluster_index;
 						break;
 					}
@@ -396,6 +402,21 @@ clusterCUDA(
 			}
 			// Clusters are initialized, use the closest in depth.
 			else {
+				__half current_closest_depth = local_cluster_depths[0];
+				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
+					// Use the cluster if it's an exact match.
+					if (__heq(local_cluster_depths[cluster_index], collected_splat_depths[j])) {
+						target_cluster_index = cluster_index;
+						break;
+					}
+
+					// Otherwise, find the closest in depth.
+					if (__hle(__habs(__hsub(local_cluster_depths[cluster_index], collected_splat_depths[j])),
+					          __habs(__hsub(current_closest_depth, collected_splat_depths[j])))) {
+						current_closest_depth = local_cluster_depths[cluster_index];
+						target_cluster_index = cluster_index;
+					}
+				}
 			}
 		}
 	}
