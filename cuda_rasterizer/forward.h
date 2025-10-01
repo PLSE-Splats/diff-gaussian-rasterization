@@ -23,6 +23,10 @@
 #define NUMBER_OF_CLUSTERS 4
 #define MINIMUM_TRANSMITTANCE 0.0001f
 
+// Half constants.
+#define CUDART_MAX_NORMAL_FP16 __ushort_as_half(0x7BFFU)
+#define CUDART_ONE_FP16 __ushort_as_half(0x3C00U)
+
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.

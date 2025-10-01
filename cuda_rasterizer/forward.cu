@@ -10,6 +10,7 @@
  */
 
 #include "forward.h"
+#include "cuda_fp16.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -323,11 +324,13 @@ clusterCUDA(
 	float expected_invdepth = 0.0f;
 
 	// Local cluster data.
-	__half local_cluster_depths[NUMBER_OF_CLUSTERS];
-	__half local_cluster_alphas[NUMBER_OF_CLUSTERS];
-	__half local_cluster_reds[NUMBER_OF_CLUSTERS];
-	__half local_cluster_greens[NUMBER_OF_CLUSTERS];
-	__half local_cluster_blues[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_depths[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_reds[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_greens[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_blues[NUMBER_OF_CLUSTERS];
 	unsigned short uninitialized_cluster_index = 0;
 
 	// Iterate over batches until all done or range is complete.
@@ -371,14 +374,14 @@ clusterCUDA(
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, con_o.w * exp(power));
-			if (alpha < 1.0f / 255.0f)
+			__half sample_alpha = __float2half(min(0.99f, con_o.w * exp(power)));
+			if (__hlt(sample_alpha, __float2half(1.0f / 255.0f)))
 				continue;
 
 			// Collect color.
-			const float sample_r = features[sample_splat_id * CHANNELS + 0];
-			const float sample_g = features[sample_splat_id * CHANNELS + 1];
-			const float sample_b = features[sample_splat_id * CHANNELS + 2];
+			const __half sample_r = __float2half(features[sample_splat_id * CHANNELS + 0]);
+			const __half sample_g = __float2half(features[sample_splat_id * CHANNELS + 1]);
+			const __half sample_b = __float2half(features[sample_splat_id * CHANNELS + 2]);
 
 			// Pick a target cluster.
 			unsigned short target_cluster_index = 0;
@@ -387,7 +390,8 @@ clusterCUDA(
 			if (uninitialized_cluster_index < NUMBER_OF_CLUSTERS) {
 				for (int cluster_index = 0; cluster_index < uninitialized_cluster_index; ++cluster_index) {
 					// Use the cluster if it's an exact match.
-					if (__heq(local_cluster_depths[cluster_index], collected_splat_depths[j])) {
+					if (__heq(pixel_cluster_depths[cluster_index], collected_splat_depths[j]))
+					{
 						target_cluster_index = cluster_index;
 						break;
 					}
@@ -401,23 +405,73 @@ clusterCUDA(
 				}
 			}
 			// Clusters are initialized, use the closest in depth.
-			else {
-				__half current_closest_depth = local_cluster_depths[0];
+			else
+			{
+				__half current_closest_depth_distance = CUDART_MAX_NORMAL_FP16;
 				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
 					// Use the cluster if it's an exact match.
-					if (__heq(local_cluster_depths[cluster_index], collected_splat_depths[j])) {
+					if (__heq(pixel_cluster_depths[cluster_index], collected_splat_depths[j]))
+					{
 						target_cluster_index = cluster_index;
 						break;
 					}
 
 					// Otherwise, find the closest in depth.
-					if (__hle(__habs(__hsub(local_cluster_depths[cluster_index], collected_splat_depths[j])),
-					          __habs(__hsub(current_closest_depth, collected_splat_depths[j])))) {
-						current_closest_depth = local_cluster_depths[cluster_index];
+					// | cluster depth - sample depth | < current_closest_depth_distance
+					if (__hlt(
+							__habs(
+								__hsub(
+									pixel_cluster_depths[cluster_index],
+									collected_splat_depths[j])
+							),
+							current_closest_depth_distance
+						)
+					)
+					{
+						current_closest_depth_distance = pixel_cluster_depths[cluster_index];
 						target_cluster_index = cluster_index;
 					}
 				}
 			}
+
+			// Target cluster found. Add the splat to it.
+			pixel_cluster_splat_counts[target_cluster_index] = __hadd(
+				pixel_cluster_splat_counts[target_cluster_index],
+				CUDART_ONE_FP16
+			);
+			pixel_cluster_alpha_sums[target_cluster_index] = __hadd(
+				pixel_cluster_alpha_sums[target_cluster_index],
+				sample_alpha
+			);
+			pixel_cluster_alphas[target_cluster_index] = __hmul(
+				pixel_cluster_alphas[target_cluster_index],
+				__hsub(CUDART_ONE_FP16, sample_alpha)
+			);
+			pixel_cluster_reds[target_cluster_index] = __hfma(
+				sample_alpha,
+				sample_r,
+				pixel_cluster_reds[target_cluster_index]
+			);
+			pixel_cluster_greens[target_cluster_index] = __hfma(
+				sample_alpha,
+				sample_g,
+				pixel_cluster_greens[target_cluster_index]
+			);
+			pixel_cluster_blues[target_cluster_index] = __hfma(
+				sample_alpha,
+				sample_b,
+				pixel_cluster_blues[target_cluster_index]
+			);
+
+			// Update cluster depth.
+			const __half current_depth = pixel_cluster_depths[target_cluster_index];
+			pixel_cluster_depths[target_cluster_index] = __hadd(
+				current_depth,
+				__hdiv(
+					__hsub(collected_splat_depths[target_cluster_index], current_depth),
+					pixel_cluster_splat_counts[target_cluster_index]
+				)
+			);
 		}
 	}
 }
