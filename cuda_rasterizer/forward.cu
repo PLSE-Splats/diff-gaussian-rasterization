@@ -482,18 +482,35 @@ clusterCUDA(
 	// Write-out number of contributions.
 	n_contributions[pixel_index] = contributor;
 
-	// For each cluster, convert transmittance accumulator to alpha, normalize RGB, and write out to outputs.
-	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index)
+	// For each cluster, convert transmittance accumulator to alpha, normalize RGB, and write out to outputs in sorted order.
+	__half lowest_depth = CUDART_ZERO_FP16;
+	for (int output_index = 0; output_index < NUMBER_OF_CLUSTERS; ++output_index)
 	{
-		cluster_depths[cluster_index] = pixel_cluster_depths[cluster_index];
-		cluster_alphas[cluster_index] = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[cluster_index]);
+		// Find the next lowest depth such that lowest_depth < pixel_cluster_depths[candidate_index] < current_lowest_depth.
+		int collection_index = 0;
+		__half current_lowest_depth = CUDART_MAX_NORMAL_FP16;
+		for (int candidate_index = 0; candidate_index < NUMBER_OF_CLUSTERS; ++candidate_index)
+		{
+			if (__hlt(pixel_cluster_depths[candidate_index], current_lowest_depth) && __hgt(
+				pixel_cluster_depths[candidate_index], lowest_depth))
+			{
+				current_lowest_depth = pixel_cluster_depths[candidate_index];
+				collection_index = candidate_index;
+			}
+		}
+
+		// Update the lowest depth for next pass.
+		lowest_depth = current_lowest_depth;
+
+		cluster_depths[output_index] = pixel_cluster_depths[collection_index];
+		cluster_alphas[output_index] = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
 
 		// Compute the reciprocal of alpha sums to avoid repeated divisions.
-		const __half alpha_sum_reciprocal = hrcp(pixel_cluster_alpha_sums[cluster_index]);
+		const __half alpha_sum_reciprocal = hrcp(pixel_cluster_alpha_sums[collection_index]);
 
-		cluster_reds[cluster_index] = __hmul(pixel_cluster_reds[cluster_index], alpha_sum_reciprocal);
-		cluster_greens[cluster_index] = __hmul(pixel_cluster_greens[cluster_index], alpha_sum_reciprocal);
-		cluster_blues[cluster_index] = __hmul(pixel_cluster_blues[cluster_index], alpha_sum_reciprocal);
+		cluster_reds[output_index] = __hmul(pixel_cluster_reds[collection_index], alpha_sum_reciprocal);
+		cluster_greens[output_index] = __hmul(pixel_cluster_greens[collection_index], alpha_sum_reciprocal);
+		cluster_blues[output_index] = __hmul(pixel_cluster_blues[collection_index], alpha_sum_reciprocal);
 	}
 }
 
