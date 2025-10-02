@@ -335,11 +335,6 @@ clusterCUDA(
 
 	// Iterate over batches until all done or range is complete.
 	for (unsigned short i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
-		// End early if the entire block is done clustering.
-		const int num_done = __syncthreads_count(done);
-		if (num_done == BLOCK_SIZE)
-			break;
-
 		// Collectively fetch per-splat data from global to shared.
 		const unsigned short progress = i * BLOCK_SIZE + thread_rank;
 		if (splat_id_range.x + progress < splat_id_range.y) {
@@ -352,6 +347,7 @@ clusterCUDA(
 		block.sync();
 
 		// Iterate over current batch (per thread).
+		// Does nothing if the thread is not mapped to a valid pixel (done).
 		for (int j = 0; !done && j < min(BLOCK_SIZE, todo); ++j) {
 			// Collect sample ID.
 			const uint32_t sample_splat_id = collected_splat_ids[j];
@@ -473,6 +469,31 @@ clusterCUDA(
 				)
 			);
 		}
+	}
+
+	// Clustering is complete, need to finalize values and write out.
+
+	// Exit if this thread is not mapped to a valid pixel.
+	if (done)
+	{
+		return;
+	}
+
+	// Write-out number of contributions.
+	n_contributions[pixel_index] = contributor;
+
+	// For each cluster, convert transmittance accumulator to alpha, normalize RGB, and write out to outputs.
+	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index)
+	{
+		cluster_depths[cluster_index] = pixel_cluster_depths[cluster_index];
+		cluster_alphas[cluster_index] = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[cluster_index]);
+
+		// Compute the reciprocal of alpha sums to avoid repeated divisions.
+		const __half alpha_sum_reciprocal = hrcp(pixel_cluster_alpha_sums[cluster_index]);
+
+		cluster_reds[cluster_index] = __hmul(pixel_cluster_reds[cluster_index], alpha_sum_reciprocal);
+		cluster_greens[cluster_index] = __hmul(pixel_cluster_greens[cluster_index], alpha_sum_reciprocal);
+		cluster_blues[cluster_index] = __hmul(pixel_cluster_blues[cluster_index], alpha_sum_reciprocal);
 	}
 }
 
