@@ -86,7 +86,6 @@ namespace FORWARD
 		int height,
 		const uint32_t *splat_ids,
 		const ushort2 *splat_id_ranges,
-		const int *radii,
 		const float2 *means_2d,
 		const float4 *conic_opacities,
 		const float *depths,

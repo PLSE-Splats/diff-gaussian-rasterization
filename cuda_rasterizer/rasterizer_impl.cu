@@ -349,7 +349,6 @@ int CudaRasterizer::Rasterizer::forward(
 			height,
 			d_sorted_splat_ids,
 			d_tile_ranges,
-			radii,
 			geomState.means2D,
 			geomState.conic_opacity,
 			geomState.depths,
