@@ -363,22 +363,23 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Render.
 
-	// // Let each tile blend its range of Gaussians independently in parallel
-	// const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-	// CHECK_CUDA(FORWARD::render(
-	// 	tile_grid, block,
-	// 	imgState.ranges,
-	// 	binningState.point_list,
-	// 	width, height,
-	// 	geomState.means2D,
-	// 	feature_ptr,
-	// 	geomState.conic_opacity,
-	// 	imgState.accum_alpha,
-	// 	imgState.n_contrib,
-	// 	background,
-	// 	out_color,
-	// 	geomState.depths,
-	// 	depth), debug)
+	// Let each tile blend its range of Gaussians independently in parallel
+	CHECK_CUDA(
+		FORWARD::render(
+			tile_grid,
+			block,
+			width,
+			height,
+			d_cluster_depths,
+			d_cluster_alphas,
+			d_cluster_reds,
+			d_cluster_greens,
+			d_cluster_blues,
+			background,
+			imgState.accum_alpha,
+			depth,
+			out_color),
+		debug)
 
 	return num_rendered;
 }

@@ -100,19 +100,20 @@ namespace FORWARD
 
 	// Main rasterization method.
 	void render(
-		const dim3 grid, dim3 block,
-		const uint2* ranges,
-		const uint32_t* point_list,
-		int W, int H,
-		const float2* points_xy_image,
-		const float* features,
-		const float4* conic_opacity,
-		float* final_T,
-		uint32_t* n_contrib,
+		dim3 grid_size,
+		dim3 block_size,
+		int width,
+		int height,
+		const __half* cluster_depths,
+		const __half* cluster_alphas,
+		const __half* cluster_reds,
+		const __half* cluster_greens,
+		const __half* cluster_blues,
 		const float* bg_color,
-		float* out_color,
-		float* depths,
-		float* depth);
+		float* final_transmittance,
+		float* invdepth,
+		float* out_color
+	);
 }
 
 

@@ -518,156 +518,118 @@ clusterCUDA(
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
-	const uint2* __restrict__ ranges,
-	const uint32_t* __restrict__ point_list,
-	int W, int H,
-	const float2* __restrict__ points_xy_image,
-	const float* __restrict__ features,
-	const float4* __restrict__ conic_opacity,
-	float* __restrict__ final_T,
-	uint32_t* __restrict__ n_contrib,
+	const int width,
+	const int height,
+	const __half* cluster_depths,
+	const __half* cluster_alphas,
+	const __half* cluster_reds,
+	const __half* cluster_greens,
+	const __half* cluster_blues,
 	const float* __restrict__ bg_color,
-	float* __restrict__ out_color,
-	const float* __restrict__ depths,
-	float* __restrict__ invdepth)
+	float* __restrict__ final_transmittance,
+	float* __restrict__ invdepth,
+	float* __restrict__ out_color
+)
 {
-	// Identify current tile and associated min/max pixel range.
-	auto block = cg::this_thread_block();
-	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
-	uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
-	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
-	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
-	uint32_t pix_id = W * pix.y + pix.x;
-	float2 pixf = { (float)pix.x, (float)pix.y };
+	// Gather thread information.
+	const auto block = cg::this_thread_block();
+	const auto group_index = block.group_index();
+	const auto thread_index = block.thread_index();
 
-	// Check if this thread is associated with a valid pixel or outside.
-	bool inside = pix.x < W&& pix.y < H;
-	// Done threads can help with fetching, but don't rasterize
-	bool done = !inside;
+	// Gather pixel information.
+	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
+	const uint2 pixel_coordinate = {
+		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
+	};
+	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
 
-	// Load start/end range of IDs to process in bit sorted list.
-	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
-	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
-	int toDo = range.y - range.x;
+	// Compute if this thread is associated with a visible pixel.
+	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
 
-	// Allocate storage for batches of collectively fetched data.
-	__shared__ int collected_id[BLOCK_SIZE];
-	__shared__ float2 collected_xy[BLOCK_SIZE];
-	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	// Exit if this pixel is not in bounds (does not render).
+	if (!pixel_in_bounds)
+		return;
 
-	// Initialize helper variables
-	float T = 1.0f;
-	uint32_t contributor = 0;
-	uint32_t last_contributor = 0;
-	float C[CHANNELS] = { 0 };
+	// Initialize rendering variables.
+	__half pixel_transmittance = CUDART_ONE_FP16;
+	__half expected_invdepth = CUDART_ZERO_FP16;
+	__half pixel_color[CHANNELS] = {};
 
-	float expected_invdepth = 0.0f;
-
-	// Iterate over batches until all done or range is complete
-	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+	// Iterate over clusters, front to back.
+	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index)
 	{
-		// End if entire block votes that it is done rasterizing
-		int num_done = __syncthreads_count(done);
-		if (num_done == BLOCK_SIZE)
+		// Exit if transmittance is too low.
+		if (__hlt(pixel_transmittance, __float2half(MINIMUM_TRANSMITTANCE)))
 			break;
 
-		// Collectively fetch per-Gaussian data from global to shared
-		int progress = i * BLOCK_SIZE + block.thread_rank();
-		if (range.x + progress < range.y)
-		{
-			int coll_id = point_list[range.x + progress];
-			collected_id[block.thread_rank()] = coll_id;
-			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
-			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-		}
-		block.sync();
+		// Get cluster data (and premultiply alphas).
+		const __half cluster_alpha = cluster_alphas[cluster_index];
+		const __half cluster_red = __hmul(cluster_alpha, cluster_reds[cluster_index]);
+		const __half cluster_green = __hmul(cluster_alpha, cluster_greens[cluster_index]);
+		const __half cluster_blue = __hmul(cluster_alpha, cluster_blues[cluster_index]);
 
-		// Iterate over current batch
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
-		{
-			// Keep track of current position in range
-			contributor++;
+		// Contribute colors to pixel.
+		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
+		pixel_color[1] = __hfma(cluster_green, pixel_transmittance, pixel_color[1]);
+		pixel_color[2] = __hfma(cluster_blue, pixel_transmittance, pixel_color[2]);
 
-			// Resample using conic matrix (cf. "Surface 
-			// Splatting" by Zwicker et al., 2001)
-			float2 xy = collected_xy[j];
-			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
-			float4 con_o = collected_conic_opacity[j];
-			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
-			if (power > 0.0f)
-				continue;
+		// Update invdepth.
+		if (invdepth)
+			expected_invdepth = __hfma(
+				__hmul(hrcp(cluster_depths[cluster_index]), cluster_alpha),
+				pixel_transmittance,
+				expected_invdepth
+			);
 
-			// Eq. (2) from 3D Gaussian splatting paper.
-			// Obtain alpha by multiplying with Gaussian opacity
-			// and its exponential falloff from mean.
-			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, con_o.w * exp(power));
-			if (alpha < 1.0f / 255.0f)
-				continue;
-			float test_T = T * (1 - alpha);
-			if (test_T < 0.0001f)
-			{
-				done = true;
-				continue;
-			}
-
-			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
-
-			if(invdepth)
-			expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
-
-			T = test_T;
-
-			// Keep track of last range entry to update this
-			// pixel.
-			last_contributor = contributor;
-		}
+		// Update transmittance.
+		pixel_transmittance = __hmul(
+			pixel_transmittance,
+			__hsub(CUDART_ONE_FP16, cluster_alpha)
+		);
 	}
 
-	// All threads that treat valid pixel write out their final
-	// rendering data to the frame and auxiliary buffers.
-	if (inside)
-	{
-		final_T[pix_id] = T;
-		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
-			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+	// Write to outputs.
+	final_transmittance[pixel_index] = __half2float(pixel_transmittance);
+	if (invdepth)
+		invdepth[pixel_index] = __half2float(expected_invdepth);
 
-		if (invdepth)
-		invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
+	// Write to output color, adding background.
+	for (int channel = 0; channel < CHANNELS; ++channel)
+	{
+		out_color[channel * height * width + pixel_index] = __half2float(pixel_color[channel]) + __half2float(
+			pixel_transmittance) * bg_color[channel];
 	}
 }
 
 void FORWARD::render(
-	const dim3 grid, dim3 block,
-	const uint2* ranges,
-	const uint32_t* point_list,
-	int W, int H,
-	const float2* means2D,
-	const float* colors,
-	const float4* conic_opacity,
-	float* final_T,
-	uint32_t* n_contrib,
+	dim3 grid_size,
+	dim3 block_size,
+	int width,
+	int height,
+	const __half* cluster_depths,
+	const __half* cluster_alphas,
+	const __half* cluster_reds,
+	const __half* cluster_greens,
+	const __half* cluster_blues,
 	const float* bg_color,
-	float* out_color,
-	float* depths,
-	float* depth)
+	float* final_transmittance,
+	float* invdepth,
+	float* out_color
+)
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
-		ranges,
-		point_list,
-		W, H,
-		means2D,
-		colors,
-		conic_opacity,
-		final_T,
-		n_contrib,
+	renderCUDA<NUM_CHANNELS> << <grid_size, block_size >> >(
+		width,
+		height,
+		cluster_depths,
+		cluster_alphas,
+		cluster_reds,
+		cluster_greens,
+		cluster_blues,
 		bg_color,
-		out_color,
-		depths, 
-		depth);
+		final_transmittance,
+		invdepth,
+		out_color
+	);
 }
 
 void FORWARD::cluster(
@@ -677,32 +639,33 @@ void FORWARD::cluster(
 	const int height,
 	const uint32_t *splat_ids,
 	const ushort2 *splat_id_ranges,
-	const float2 *means_2d,
-	const float4 *conic_opacity,
-	const float *depths,
-	const float *features,
-	uint32_t *n_contrib,
-	__half *cluster_depth,
-	__half *cluster_alpha,
-	__half *cluster_r,
-	__half *cluster_g,
-	__half *cluster_b
-) {
+	const float2* means_2d,
+	const float4* conic_opacities,
+	const float* depths,
+	const float* features,
+	uint32_t* n_contributions,
+	__half* cluster_depths,
+	__half* cluster_alphas,
+	__half* cluster_reds,
+	__half* cluster_greens,
+	__half* cluster_blues
+)
+{
 	clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
 		width,
 		height,
 		splat_ids,
 		splat_id_ranges,
 		means_2d,
-		conic_opacity,
+		conic_opacities,
 		depths,
 		features,
-		n_contrib,
-		cluster_depth,
-		cluster_alpha,
-		cluster_r,
-		cluster_g,
-		cluster_b
+		n_contributions,
+		cluster_depths,
+		cluster_alphas,
+		cluster_reds,
+		cluster_greens,
+		cluster_blues
 	);
 }
 
