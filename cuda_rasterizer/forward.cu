@@ -308,8 +308,8 @@ clusterCUDA(
 
 	// Load input range for this tile.
 	const auto splat_id_range = splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
-	uint32_t todo = splat_id_range.y - splat_id_range.x;
-	const uint32_t rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
+	int todo = splat_id_range.y - splat_id_range.x;
+	const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
@@ -331,9 +331,9 @@ clusterCUDA(
 	unsigned short uninitialized_cluster_index = 0;
 
 	// Iterate over batches until all done or range is complete.
-	for (unsigned short i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
+	for (int i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
 		// Collectively fetch per-splat data from global to shared.
-		const unsigned short progress = i * BLOCK_SIZE + thread_rank;
+		const unsigned int progress = i * BLOCK_SIZE + thread_rank;
 		if (splat_id_range.x + progress < splat_id_range.y) {
 			const uint32_t collected_splat_id = splat_ids[splat_id_range.x + progress];
 			collected_splat_ids[thread_rank] = collected_splat_id;
