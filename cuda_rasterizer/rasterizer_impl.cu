@@ -381,6 +381,12 @@ int CudaRasterizer::Rasterizer::forward(
 //			out_color),
 //		debug)
 
+	CHECK_CUDA(cudaFree(d_cluster_depths), debug);
+	CHECK_CUDA(cudaFree(d_cluster_alphas), debug);
+	CHECK_CUDA(cudaFree(d_cluster_reds), debug);
+	CHECK_CUDA(cudaFree(d_cluster_greens), debug);
+	CHECK_CUDA(cudaFree(d_cluster_blues), debug);
+
 	return num_rendered;
 }
 

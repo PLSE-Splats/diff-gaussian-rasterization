@@ -487,7 +487,7 @@ clusterCUDA(
 
 	// For each cluster, convert transmittance accumulator to alpha, normalize RGB, and write out to outputs in sorted order.
 	__half lowest_depth = CUDART_ZERO_FP16;
-	for (int output_index = 0; output_index < NUMBER_OF_CLUSTERS; ++output_index)
+	for (int output_cluster_index = 0; output_cluster_index < NUMBER_OF_CLUSTERS; ++output_cluster_index)
 	{
 		// Find the next lowest depth such that lowest_depth < pixel_cluster_depths[candidate_index] < current_lowest_depth.
 		int collection_index = 0;
@@ -504,6 +504,8 @@ clusterCUDA(
 
 		// Update the lowest depth for next pass.
 		lowest_depth = current_lowest_depth;
+
+		const uint32_t output_index = width * height * output_cluster_index + pixel_index;
 
 		cluster_depths[output_index] = pixel_cluster_depths[collection_index];
 		cluster_alphas[output_index] = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
@@ -564,11 +566,13 @@ renderCUDA(
 		if (__hlt(pixel_transmittance, __float2half(MINIMUM_TRANSMITTANCE)))
 			break;
 
+		const uint32_t data_index = width * height * cluster_index + pixel_index;
+
 		// Get cluster data (and premultiply alphas).
-		const __half cluster_alpha = cluster_alphas[cluster_index];
-		const __half cluster_red = __hmul(cluster_alpha, cluster_reds[cluster_index]);
-		const __half cluster_green = __hmul(cluster_alpha, cluster_greens[cluster_index]);
-		const __half cluster_blue = __hmul(cluster_alpha, cluster_blues[cluster_index]);
+		const __half cluster_alpha = cluster_alphas[data_index];
+		const __half cluster_red = __hmul(cluster_alpha, cluster_reds[data_index]);
+		const __half cluster_green = __hmul(cluster_alpha, cluster_greens[data_index]);
+		const __half cluster_blue = __hmul(cluster_alpha, cluster_blues[data_index]);
 
 		// Contribute colors to pixel.
 		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
@@ -578,7 +582,7 @@ renderCUDA(
 		// Update invdepth.
 		if (invdepth)
 			expected_invdepth = __hfma(
-				__hmul(hrcp(cluster_depths[cluster_index]), cluster_alpha),
+				__hmul(hrcp(cluster_depths[data_index]), cluster_alpha),
 				pixel_transmittance,
 				expected_invdepth
 			);
