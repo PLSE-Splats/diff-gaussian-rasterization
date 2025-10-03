@@ -20,7 +20,7 @@
 #include "cuda_fp16.h"
 
 // Clustering parameters.
-#define NUMBER_OF_CLUSTERS 4
+#define NUMBER_OF_CLUSTERS 8
 #define MINIMUM_TRANSMITTANCE 0.0001f
 
 // Half constants.

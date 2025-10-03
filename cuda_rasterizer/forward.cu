@@ -286,7 +286,8 @@ clusterCUDA(
 	__half *cluster_reds,
 	__half *cluster_greens,
 	__half *cluster_blues
-) {
+)
+{
 	// Gather thread information.
 	const auto block = cg::this_thread_block();
 	const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
@@ -318,17 +319,15 @@ clusterCUDA(
 
 	// Clustering helper variables.
 	uint32_t contributor = 0;
-	uint32_t last_contributor = 0;
-	float expected_invdepth = 0.0f;
 
 	// Local cluster data.
-	__half pixel_cluster_depths[NUMBER_OF_CLUSTERS];
-	__half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS];
-	__half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS];
-	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
-	__half pixel_cluster_reds[NUMBER_OF_CLUSTERS];
-	__half pixel_cluster_greens[NUMBER_OF_CLUSTERS];
-	__half pixel_cluster_blues[NUMBER_OF_CLUSTERS];
+	__half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
 	unsigned short uninitialized_cluster_index = 0;
 
 	// Iterate over batches until all done or range is complete.
@@ -382,7 +381,15 @@ clusterCUDA(
 
 			// Use the next uninitialize cluster.
 			if (uninitialized_cluster_index < NUMBER_OF_CLUSTERS) {
-				for (int cluster_index = 0; cluster_index < uninitialized_cluster_index; ++cluster_index) {
+				// Start with the next open cluster index.
+				target_cluster_index = uninitialized_cluster_index;
+
+				// Increment the uninitialized cluster if this is the first sample.
+				if (uninitialized_cluster_index == 0)
+					uninitialized_cluster_index++;
+
+				for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index)
+				{
 					// Use the cluster if it's an exact match.
 					if (__heq(pixel_cluster_depths[cluster_index], collected_splat_depths[j]))
 					{
@@ -390,10 +397,8 @@ clusterCUDA(
 						break;
 					}
 
-					// Use the uninitialized cluster if no prior exact matches were found
-					// and increment uninitialized index for the next pass.
+					// If no matches were found, increment uninitialized index for the next pass.
 					if (cluster_index == uninitialized_cluster_index - 1) {
-						target_cluster_index = uninitialized_cluster_index;
 						uninitialized_cluster_index++;
 					}
 				}
@@ -512,9 +517,6 @@ clusterCUDA(
 	}
 }
 
-// Main rasterization method. Collaboratively works on one tile per
-// block, each thread treats one pixel. Alternates between fetching 
-// and rasterizing data.
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(

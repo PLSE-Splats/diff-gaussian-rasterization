@@ -364,22 +364,22 @@ int CudaRasterizer::Rasterizer::forward(
 	// Render.
 
 	// Let each tile blend its range of Gaussians independently in parallel
-	CHECK_CUDA(
-		FORWARD::render(
-			tile_grid,
-			block,
-			width,
-			height,
-			d_cluster_depths,
-			d_cluster_alphas,
-			d_cluster_reds,
-			d_cluster_greens,
-			d_cluster_blues,
-			background,
-			imgState.accum_alpha,
-			depth,
-			out_color),
-		debug)
+//	CHECK_CUDA(
+//		FORWARD::render(
+//			tile_grid,
+//			block,
+//			width,
+//			height,
+//			d_cluster_depths,
+//			d_cluster_alphas,
+//			d_cluster_reds,
+//			d_cluster_greens,
+//			d_cluster_blues,
+//			background,
+//			imgState.accum_alpha,
+//			depth,
+//			out_color),
+//		debug)
 
 	return num_rendered;
 }
