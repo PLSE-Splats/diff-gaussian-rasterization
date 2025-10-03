@@ -235,6 +235,19 @@ int CudaRasterizer::Rasterizer::forward(
 	{
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
 	}
+	
+	// Allocate clustering frame buffer.
+	__half *d_cluster_depths;
+	__half *d_cluster_alphas;
+	__half *d_cluster_reds;
+	__half *d_cluster_greens;
+	__half *d_cluster_blues;
+
+	CHECK_CUDA(cudaMalloc(&d_cluster_depths, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_alphas, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_reds, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_greens, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
+	CHECK_CUDA(cudaMalloc(&d_cluster_blues, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
 
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
@@ -325,19 +338,6 @@ int CudaRasterizer::Rasterizer::forward(
 			d_sorted_tile_ids,
 			d_tile_ranges);
 	CHECK_CUDA(, debug)
-
-	// Allocate clustering frame buffer.
-	__half *d_cluster_depths;
-	__half *d_cluster_alphas;
-	__half *d_cluster_reds;
-	__half *d_cluster_greens;
-	__half *d_cluster_blues;
-
-	CHECK_CUDA(cudaMalloc(&d_cluster_depths, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_alphas, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_reds, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_greens, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_blues, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
 
 	// Cluster.
 	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
