@@ -324,11 +324,16 @@ clusterCUDA(
 	__half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
-	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
 	__half pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
 	unsigned short uninitialized_cluster_index = 0;
+
+	for (int i = 0; i < NUMBER_OF_CLUSTERS; ++i)
+	{
+		pixel_cluster_alphas[i] = CUDART_ONE_FP16;
+	}
 
 	// Iterate over batches until all done or range is complete.
 	for (int i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
