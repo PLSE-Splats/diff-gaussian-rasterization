@@ -281,6 +281,8 @@ clusterCUDA(
 	const float *depths,
 	const float *features,
 	uint32_t *n_contributions,
+	const float* bg_color,
+	float* out_color,
 	__half *cluster_depths,
 	__half *cluster_alphas,
 	__half *cluster_reds,
@@ -490,6 +492,11 @@ clusterCUDA(
 	// Write-out number of contributions.
 	n_contributions[pixel_index] = contributor;
 
+	// Initialize rendering variables.
+	__half pixel_transmittance = CUDART_ONE_FP16;
+	__half expected_invdepth = CUDART_ZERO_FP16;
+	__half pixel_color[CHANNELS] = {};
+
 	// For each cluster, convert transmittance accumulator to alpha, normalize RGB, and write out to outputs in sorted order.
 	__half lowest_depth = CUDART_ZERO_FP16;
 	for (int output_cluster_index = 0; output_cluster_index < NUMBER_OF_CLUSTERS; ++output_cluster_index)
@@ -510,26 +517,34 @@ clusterCUDA(
 		// Update the lowest depth for next pass.
 		lowest_depth = current_lowest_depth;
 
-		const uint32_t output_index = width * height * output_cluster_index + pixel_index;
+		// Convert cluster transmittance to alpha.
+		const __half cluster_alpha = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
 
-		cluster_depths[output_index] = pixel_cluster_depths[collection_index];
-		cluster_alphas[output_index] = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
+		// Compute the reciprocal of alpha sums and premultiplied alpha to avoid repeated divisions.
+		const __half alpha_sum_reciprocal = __hmul(hrcp(pixel_cluster_alpha_sums[collection_index]), cluster_alpha);
 
-		// Compute the reciprocal of alpha sums to avoid repeated divisions.
-		const __half alpha_sum_reciprocal = hrcp(pixel_cluster_alpha_sums[collection_index]);
+		// Get cluster data (and premultiply alphas).
+		const __half cluster_red = __hmul(alpha_sum_reciprocal, pixel_cluster_reds[collection_index]);
+		const __half cluster_green = __hmul(alpha_sum_reciprocal, pixel_cluster_greens[collection_index]);
+		const __half cluster_blue = __hmul(alpha_sum_reciprocal, pixel_cluster_blues[collection_index]);
 
-		cluster_reds[output_index] = __hmul(pixel_cluster_reds[collection_index], alpha_sum_reciprocal);
-		cluster_greens[output_index] = __hmul(pixel_cluster_greens[collection_index], alpha_sum_reciprocal);
-		cluster_blues[output_index] = __hmul(pixel_cluster_blues[collection_index], alpha_sum_reciprocal);
-
-		if (pixel_index == 4000)
-		{
-			printf("%f,\t", __half2float(cluster_depths[output_index]));
-			printf("%f,\t", __half2float(cluster_alphas[output_index]));
-			printf("%f,\t", __half2float(cluster_reds[output_index]));
-			printf("%f,\t", __half2float(cluster_greens[output_index]));
-			printf("%f\n", __half2float(cluster_blues[output_index]));
-		}
+		// Contribute colors to pixel.
+		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
+		pixel_color[1] = __hfma(cluster_green, pixel_transmittance, pixel_color[1]);
+		pixel_color[2] = __hfma(cluster_blue, pixel_transmittance, pixel_color[2]);
+		
+		// Update transmittance.
+		pixel_transmittance = __hmul(
+			pixel_transmittance,
+			pixel_cluster_alphas[collection_index]
+		);
+	}
+	
+	// Write to output color, adding background.
+	for (int channel = 0; channel < CHANNELS; ++channel)
+	{
+		out_color[channel * height * width + pixel_index] = __half2float(pixel_color[channel]) + __half2float(
+			pixel_transmittance) * bg_color[channel];
 	}
 }
 
@@ -595,6 +610,7 @@ renderCUDA(
 
 		if (pixel_index == 4000)
 		{
+			printf("%d:\t", data_index);
 			printf("%f,\t%f,\t%f,\t%f\t\t: ", cluster_alpha, cluster_red, cluster_green, cluster_blue);
 			printf("%f,\t%f,\t%f\n", __half2float(pixel_color[0]), __half2float(pixel_color[1]), __half2float(pixel_color[2]));
 		}
@@ -658,7 +674,7 @@ void FORWARD::render(
 	);
 }
 
-void FORWARD::cluster(
+void FORWARD::cluster_render(
 	dim3 grid_size,
 	dim3 block_size,
 	const int width,
@@ -670,6 +686,8 @@ void FORWARD::cluster(
 	const float* depths,
 	const float* features,
 	uint32_t* n_contributions,
+	const float* bg_color,
+	float* out_color,
 	__half* cluster_depths,
 	__half* cluster_alphas,
 	__half* cluster_reds,
@@ -687,6 +705,8 @@ void FORWARD::cluster(
 		depths,
 		features,
 		n_contributions,
+		bg_color,
+		out_color,
 		cluster_depths,
 		cluster_alphas,
 		cluster_reds,

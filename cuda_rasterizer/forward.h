@@ -79,7 +79,7 @@ namespace FORWARD
 	 * @param cluster_greens Output cluster premultiplied green channel.
 	 * @param cluster_blues Output cluster premultiplied blue channel.
 	 */
-	void cluster(
+	void cluster_render(
 		dim3 grid_size,
 		dim3 block_size,
 		int width,
@@ -91,6 +91,8 @@ namespace FORWARD
 		const float *depths,
 		const float *features,
 		uint32_t *n_contributions,
+		const float* bg_color,
+		float *out_color,
 		__half *cluster_depths,
 		__half *cluster_alphas,
 		__half *cluster_reds,

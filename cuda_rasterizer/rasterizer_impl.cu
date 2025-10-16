@@ -342,7 +342,7 @@ int CudaRasterizer::Rasterizer::forward(
 	// Cluster.
 	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	CHECK_CUDA(
-		FORWARD::cluster(
+		FORWARD::cluster_render(
 			tile_grid,
 			block,
 			width,
@@ -354,6 +354,8 @@ int CudaRasterizer::Rasterizer::forward(
 			geomState.depths,
 			features,
 			imgState.n_contrib,
+			background,
+			out_color,
 			d_cluster_depths,
 			d_cluster_alphas,
 			d_cluster_reds,
@@ -361,27 +363,25 @@ int CudaRasterizer::Rasterizer::forward(
 			d_cluster_blues),
 		debug);
 
-	cudaDeviceSynchronize();
-
 	// Render.
 
 	// Let each tile blend its range of Gaussians independently in parallel
-	CHECK_CUDA(
-		FORWARD::render(
-			tile_grid,
-			block,
-			width,
-			height,
-			d_cluster_depths,
-			d_cluster_alphas,
-			d_cluster_reds,
-			d_cluster_greens,
-			d_cluster_blues,
-			background,
-			imgState.accum_alpha,
-			depth,
-			out_color),
-		debug)
+	// CHECK_CUDA(
+	// 	FORWARD::render(
+	// 		tile_grid,
+	// 		block,
+	// 		width,
+	// 		height,
+	// 		d_cluster_depths,
+	// 		d_cluster_alphas,
+	// 		d_cluster_reds,
+	// 		d_cluster_greens,
+	// 		d_cluster_blues,
+	// 		background,
+	// 		imgState.accum_alpha,
+	// 		depth,
+	// 		out_color),
+	// 	debug)
 
 	CHECK_CUDA(cudaFree(d_cluster_depths), debug);
 	CHECK_CUDA(cudaFree(d_cluster_alphas), debug);
