@@ -324,11 +324,16 @@ clusterCUDA(
 	__half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
-	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS] = {};
+	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
 	__half pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
 	unsigned short uninitialized_cluster_index = 0;
+
+	// Initialize pixel_cluster_alphas to 1.0 (transmittance accumulator starts at 1).
+	for (auto & pixel_cluster_alpha : pixel_cluster_alphas) {
+		pixel_cluster_alpha = CUDART_ONE_FP16;
+	}
 
 	// Iterate over batches until all done or range is complete.
 	for (int i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
@@ -516,6 +521,15 @@ clusterCUDA(
 		cluster_reds[output_index] = __hmul(pixel_cluster_reds[collection_index], alpha_sum_reciprocal);
 		cluster_greens[output_index] = __hmul(pixel_cluster_greens[collection_index], alpha_sum_reciprocal);
 		cluster_blues[output_index] = __hmul(pixel_cluster_blues[collection_index], alpha_sum_reciprocal);
+
+		if (pixel_index == 500)
+		{
+			printf("%f,\t", __half2float(cluster_depths[output_index]));
+			printf("%f,\t", __half2float(cluster_alphas[output_index]));
+			printf("%f,\t", __half2float(cluster_reds[output_index]));
+			printf("%f,\t", __half2float(cluster_greens[output_index]));
+			printf("%f\n", __half2float(cluster_blues[output_index]));
+		}
 	}
 }
 
