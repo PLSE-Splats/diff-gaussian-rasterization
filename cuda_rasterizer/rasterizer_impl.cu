@@ -361,6 +361,8 @@ int CudaRasterizer::Rasterizer::forward(
 			d_cluster_blues),
 		debug);
 
+	cudaDeviceSynchronize();
+
 	// Render.
 
 	// Let each tile blend its range of Gaussians independently in parallel

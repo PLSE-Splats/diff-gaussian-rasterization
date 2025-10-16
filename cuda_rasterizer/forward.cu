@@ -522,7 +522,7 @@ clusterCUDA(
 		cluster_greens[output_index] = __hmul(pixel_cluster_greens[collection_index], alpha_sum_reciprocal);
 		cluster_blues[output_index] = __hmul(pixel_cluster_blues[collection_index], alpha_sum_reciprocal);
 
-		if (pixel_index == 500)
+		if (pixel_index == 4000)
 		{
 			printf("%f,\t", __half2float(cluster_depths[output_index]));
 			printf("%f,\t", __half2float(cluster_alphas[output_index]));
@@ -592,6 +592,12 @@ renderCUDA(
 		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
 		pixel_color[1] = __hfma(cluster_green, pixel_transmittance, pixel_color[1]);
 		pixel_color[2] = __hfma(cluster_blue, pixel_transmittance, pixel_color[2]);
+
+		if (pixel_index == 4000)
+		{
+			printf("%f,\t%f,\t%f,\t%f\t\t: ", cluster_alpha, cluster_red, cluster_green, cluster_blue);
+			printf("%f,\t%f,\t%f\n", __half2float(pixel_color[0]), __half2float(pixel_color[1]), __half2float(pixel_color[2]));
+		}
 
 		// Update invdepth.
 		if (invdepth)
