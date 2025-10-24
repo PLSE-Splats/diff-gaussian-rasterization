@@ -494,8 +494,8 @@ clusterRenderCUDA(
 	__half expected_invdepth = CUDART_ZERO_FP16;
 	__half pixel_color[CHANNELS] = {};
 
-	// For each cluster, convert transmittance accumulator to alpha, normalize RGB, and write out to outputs in sorted order.
-	__half lowest_depth = CUDART_ZERO_FP16;
+    // For each cluster, convert transmittance accumulator to alpha, normalize RGB, and perform alpha over.
+    __half lowest_depth = CUDART_ZERO_FP16;
 	for (int output_cluster_index = 0; output_cluster_index < NUMBER_OF_CLUSTERS; ++output_cluster_index)
 	{
 		// Find the next lowest depth such that lowest_depth < pixel_cluster_depths[candidate_index] < current_lowest_depth.
@@ -529,8 +529,16 @@ clusterRenderCUDA(
 		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
 		pixel_color[1] = __hfma(cluster_green, pixel_transmittance, pixel_color[1]);
 		pixel_color[2] = __hfma(cluster_blue, pixel_transmittance, pixel_color[2]);
-		
-		// Update transmittance.
+
+        // Update invdepth.
+        if (invdepth)
+            expected_invdepth = __hfma(
+                __hmul(hrcp(pixel_cluster_depths[collection_index]), cluster_alpha),
+                pixel_transmittance,
+                expected_invdepth
+            );
+
+        // Update transmittance.
 		pixel_transmittance = __hmul(
 			pixel_transmittance,
 			pixel_cluster_alphas[collection_index]
@@ -538,7 +546,11 @@ clusterRenderCUDA(
 	}
 	
 	// Write to output color, adding background.
-	for (int channel = 0; channel < CHANNELS; ++channel)
+    final_transmittance[pixel_index] = __half2float(pixel_transmittance);
+    if (invdepth)
+        invdepth[pixel_index] = __half2float(expected_invdepth);
+
+    for (int channel = 0; channel < CHANNELS; ++channel)
 	{
 		out_color[channel * height * width + pixel_index] = __half2float(pixel_color[channel]) + __half2float(
 			pixel_transmittance) * bg_color[channel];
