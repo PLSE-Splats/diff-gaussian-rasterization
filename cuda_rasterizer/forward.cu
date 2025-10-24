@@ -541,7 +541,7 @@ clusterRenderCUDA(
         // Update transmittance.
 		pixel_transmittance = __hmul(
 			pixel_transmittance,
-			pixel_cluster_alphas[collection_index]
+            __hsub(CUDART_ONE_FP16, cluster_alpha)
 		);
 	}
 	
