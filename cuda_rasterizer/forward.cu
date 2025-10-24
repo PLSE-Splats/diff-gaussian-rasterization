@@ -271,9 +271,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 template<uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
-clusterCUDA(
-	const int width,
-	const int height,
+clusterRenderCUDA(
+    const int width,
+    const int height,
 	const uint32_t *splat_ids,
 	const ushort2 *splat_id_ranges,
 	const float2 *means_2d,
@@ -282,12 +282,9 @@ clusterCUDA(
 	const float *features,
 	uint32_t *n_contributions,
 	const float* bg_color,
-	float* out_color,
-	__half *cluster_depths,
-	__half *cluster_alphas,
-	__half *cluster_reds,
-	__half *cluster_greens,
-	__half *cluster_blues
+    float* final_transmittance,
+    float* invdepth,
+    float* out_color
 )
 {
 	// Gather thread information.
@@ -643,37 +640,6 @@ renderCUDA(
 	}
 }
 
-void FORWARD::render(
-	dim3 grid_size,
-	dim3 block_size,
-	int width,
-	int height,
-	const __half* cluster_depths,
-	const __half* cluster_alphas,
-	const __half* cluster_reds,
-	const __half* cluster_greens,
-	const __half* cluster_blues,
-	const float* bg_color,
-	float* final_transmittance,
-	float* invdepth,
-	float* out_color
-)
-{
-	renderCUDA<NUM_CHANNELS> << <grid_size, block_size >> >(
-		width,
-		height,
-		cluster_depths,
-		cluster_alphas,
-		cluster_reds,
-		cluster_greens,
-		cluster_blues,
-		bg_color,
-		final_transmittance,
-		invdepth,
-		out_color
-	);
-}
-
 void FORWARD::cluster_render(
 	dim3 grid_size,
 	dim3 block_size,
@@ -687,15 +653,12 @@ void FORWARD::cluster_render(
 	const float* features,
 	uint32_t* n_contributions,
 	const float* bg_color,
-	float* out_color,
-	__half* cluster_depths,
-	__half* cluster_alphas,
-	__half* cluster_reds,
-	__half* cluster_greens,
-	__half* cluster_blues
+    float* final_transmittance,
+    float* invdepth,
+    float* out_color
 )
 {
-	clusterCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
+    clusterRenderCUDA<NUM_CHANNELS> <<<grid_size, block_size>>>(
 		width,
 		height,
 		splat_ids,
@@ -706,12 +669,9 @@ void FORWARD::cluster_render(
 		features,
 		n_contributions,
 		bg_color,
-		out_color,
-		cluster_depths,
-		cluster_alphas,
-		cluster_reds,
-		cluster_greens,
-		cluster_blues
+        final_transmittance,
+        invdepth,
+        out_color
 	);
 }
 

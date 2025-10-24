@@ -92,29 +92,9 @@ namespace FORWARD
 		const float *features,
 		uint32_t *n_contributions,
 		const float* bg_color,
-		float *out_color,
-		__half *cluster_depths,
-		__half *cluster_alphas,
-		__half *cluster_reds,
-		__half *cluster_greens,
-		__half *cluster_blues
-	);
-
-	// Main rasterization method.
-	void render(
-		dim3 grid_size,
-		dim3 block_size,
-		int width,
-		int height,
-		const __half* cluster_depths,
-		const __half* cluster_alphas,
-		const __half* cluster_reds,
-		const __half* cluster_greens,
-		const __half* cluster_blues,
-		const float* bg_color,
 		float* final_transmittance,
 		float* invdepth,
-		float* out_color
+		float *out_color
 	);
 }
 

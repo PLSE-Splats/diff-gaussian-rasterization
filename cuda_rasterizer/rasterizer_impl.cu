@@ -236,19 +236,6 @@ int CudaRasterizer::Rasterizer::forward(
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
 	}
 	
-	// Allocate clustering frame buffer.
-	__half *d_cluster_depths;
-	__half *d_cluster_alphas;
-	__half *d_cluster_reds;
-	__half *d_cluster_greens;
-	__half *d_cluster_blues;
-
-	CHECK_CUDA(cudaMalloc(&d_cluster_depths, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_alphas, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_reds, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_greens, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-	CHECK_CUDA(cudaMalloc(&d_cluster_blues, width * height * NUMBER_OF_CLUSTERS * sizeof(__half)), debug);
-
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -339,8 +326,8 @@ int CudaRasterizer::Rasterizer::forward(
 			d_tile_ranges);
 	CHECK_CUDA(, debug)
 
-	// Cluster.
-	const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+    // Cluster and Render.
+    const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	CHECK_CUDA(
 		FORWARD::cluster_render(
 			tile_grid,
@@ -355,39 +342,10 @@ int CudaRasterizer::Rasterizer::forward(
 			features,
 			imgState.n_contrib,
 			background,
-			out_color,
-			d_cluster_depths,
-			d_cluster_alphas,
-			d_cluster_reds,
-			d_cluster_greens,
-			d_cluster_blues),
+            imgState.accum_alpha,
+            depth,
+            out_color),
 		debug);
-
-	// Render.
-
-	// Let each tile blend its range of Gaussians independently in parallel
-	// CHECK_CUDA(
-	// 	FORWARD::render(
-	// 		tile_grid,
-	// 		block,
-	// 		width,
-	// 		height,
-	// 		d_cluster_depths,
-	// 		d_cluster_alphas,
-	// 		d_cluster_reds,
-	// 		d_cluster_greens,
-	// 		d_cluster_blues,
-	// 		background,
-	// 		imgState.accum_alpha,
-	// 		depth,
-	// 		out_color),
-	// 	debug)
-
-	CHECK_CUDA(cudaFree(d_cluster_depths), debug);
-	CHECK_CUDA(cudaFree(d_cluster_alphas), debug);
-	CHECK_CUDA(cudaFree(d_cluster_reds), debug);
-	CHECK_CUDA(cudaFree(d_cluster_greens), debug);
-	CHECK_CUDA(cudaFree(d_cluster_blues), debug);
 
 	return num_rendered;
 }
