@@ -514,16 +514,42 @@ clusterRenderCUDA(
 		// Update the lowest depth for next pass.
 		lowest_depth = current_lowest_depth;
 
-		// Convert cluster transmittance to alpha.
-		const __half cluster_alpha = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
+        if (pixel_index == DEBUG_PIXEL)
+        {
+            printf("Pixel transmittance: %f\n", __half2float(pixel_transmittance));
+            printf("Pixel color: %f, %f, %f\n",
+                   __half2float(pixel_color[0]),
+                   __half2float(pixel_color[1]),
+                   __half2float(pixel_color[2]));
+            printf("Input cluster %d: depth=%f, cluster transmittance=%f, alpha_sum=%f\n",
+                   collection_index,
+                   __half2float(pixel_cluster_depths[collection_index]),
+                   __half2float(pixel_cluster_alphas[collection_index]),
+                   __half2float(pixel_cluster_alpha_sums[collection_index]));
+            printf("======================\n");
+        }
 
-		// Compute the reciprocal of alpha sums and premultiplied alpha to avoid repeated divisions.
+        // Convert cluster transmittance to alpha.
+        const __half cluster_alpha = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
+
+        // Compute the reciprocal of alpha sums and premultiplied alpha to avoid repeated divisions.
 		const __half alpha_sum_reciprocal = __hmul(hrcp(pixel_cluster_alpha_sums[collection_index]), cluster_alpha);
 
 		// Get cluster data (and premultiply alphas).
 		const __half cluster_red = __hmul(alpha_sum_reciprocal, pixel_cluster_reds[collection_index]);
 		const __half cluster_green = __hmul(alpha_sum_reciprocal, pixel_cluster_greens[collection_index]);
 		const __half cluster_blue = __hmul(alpha_sum_reciprocal, pixel_cluster_blues[collection_index]);
+
+        if (pixel_index == DEBUG_PIXEL)
+        {
+            printf("Cluster alpha: %f\n", __half2float(cluster_alpha));
+            printf("Alpha sum reciprocal: %f\n", __half2float(alpha_sum_reciprocal));
+            printf("Cluster premultiplied color: %f, %f, %f\n",
+                   __half2float(cluster_red),
+                   __half2float(cluster_green),
+                   __half2float(cluster_blue));
+            printf("======================\n");
+        }
 
 		// Contribute colors to pixel.
 		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
@@ -540,9 +566,19 @@ clusterRenderCUDA(
 
         // Update transmittance.
 		pixel_transmittance = __hmul(
-			pixel_transmittance,
-            __hsub(CUDART_ONE_FP16, cluster_alpha)
-		);
+            pixel_transmittance,
+            __hsub(CUDART_ONE_FP16, __hmin(CUDART_ONE_FP16, cluster_alpha))
+        );
+        if (pixel_index == DEBUG_PIXEL)
+        {
+            printf("Pixel color after cluster %d: %f, %f, %f\n",
+                   collection_index,
+                   __half2float(pixel_color[0]),
+                   __half2float(pixel_color[1]),
+                   __half2float(pixel_color[2]));
+            printf("Pixel transmittance: %f\n", __half2float(pixel_transmittance));
+            printf("======================\n\n");
+        }
 	}
 	
 	// Write to output color, adding background.
@@ -554,101 +590,11 @@ clusterRenderCUDA(
 	{
 		out_color[channel * height * width + pixel_index] = __half2float(pixel_color[channel]) + __half2float(
 			pixel_transmittance) * bg_color[channel];
-	}
-}
 
-template <uint32_t CHANNELS>
-__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
-renderCUDA(
-	const int width,
-	const int height,
-	const __half* cluster_depths,
-	const __half* cluster_alphas,
-	const __half* cluster_reds,
-	const __half* cluster_greens,
-	const __half* cluster_blues,
-	const float* __restrict__ bg_color,
-	float* __restrict__ final_transmittance,
-	float* __restrict__ invdepth,
-	float* __restrict__ out_color
-)
-{
-	// Gather thread information.
-	const auto block = cg::this_thread_block();
-	const auto group_index = block.group_index();
-	const auto thread_index = block.thread_index();
-
-	// Gather pixel information.
-	const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X, group_index.y * BLOCK_Y};
-	const uint2 pixel_coordinate = {
-		minimum_pixel_coordinate.x + thread_index.x, minimum_pixel_coordinate.y + thread_index.y
-	};
-	const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
-
-	// Compute if this thread is associated with a visible pixel.
-	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
-
-	// Exit if this pixel is not in bounds (does not render).
-	if (!pixel_in_bounds)
-		return;
-
-	// Initialize rendering variables.
-	__half pixel_transmittance = CUDART_ONE_FP16;
-	__half expected_invdepth = CUDART_ZERO_FP16;
-	__half pixel_color[CHANNELS] = {};
-
-	// Iterate over clusters, front to back.
-	for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index)
-	{
-		// Exit if transmittance is too low.
-		if (__hlt(pixel_transmittance, __float2half(MINIMUM_TRANSMITTANCE)))
-			break;
-
-		const uint32_t data_index = width * height * cluster_index + pixel_index;
-
-		// Get cluster data (and premultiply alphas).
-		const __half cluster_alpha = cluster_alphas[data_index];
-		const __half cluster_red = __hmul(cluster_alpha, cluster_reds[data_index]);
-		const __half cluster_green = __hmul(cluster_alpha, cluster_greens[data_index]);
-		const __half cluster_blue = __hmul(cluster_alpha, cluster_blues[data_index]);
-
-		// Contribute colors to pixel.
-		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
-		pixel_color[1] = __hfma(cluster_green, pixel_transmittance, pixel_color[1]);
-		pixel_color[2] = __hfma(cluster_blue, pixel_transmittance, pixel_color[2]);
-
-		if (pixel_index == 4000)
-		{
-			printf("%d:\t", data_index);
-			printf("%f,\t%f,\t%f,\t%f\t\t: ", cluster_alpha, cluster_red, cluster_green, cluster_blue);
-			printf("%f,\t%f,\t%f\n", __half2float(pixel_color[0]), __half2float(pixel_color[1]), __half2float(pixel_color[2]));
-		}
-
-		// Update invdepth.
-		if (invdepth)
-			expected_invdepth = __hfma(
-				__hmul(hrcp(cluster_depths[data_index]), cluster_alpha),
-				pixel_transmittance,
-				expected_invdepth
-			);
-
-		// Update transmittance.
-		pixel_transmittance = __hmul(
-			pixel_transmittance,
-			__hsub(CUDART_ONE_FP16, cluster_alpha)
-		);
-	}
-
-	// Write to outputs.
-	final_transmittance[pixel_index] = __half2float(pixel_transmittance);
-	if (invdepth)
-		invdepth[pixel_index] = __half2float(expected_invdepth);
-
-	// Write to output color, adding background.
-	for (int channel = 0; channel < CHANNELS; ++channel)
-	{
-		out_color[channel * height * width + pixel_index] = __half2float(pixel_color[channel]) + __half2float(
-			pixel_transmittance) * bg_color[channel];
+        if (pixel_index == DEBUG_PIXEL)
+        {
+            printf("%f, ", out_color[channel * height * width + pixel_index]);
+        }
 	}
 }
 
