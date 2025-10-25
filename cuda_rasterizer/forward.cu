@@ -304,6 +304,11 @@ clusterRenderCUDA(
 	// Compute if this thread is associated with a visible pixel.
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
 	bool done = !pixel_in_bounds;
+    if (pixel_index == DEBUG_PIXEL)
+    {
+        printf("Image resolution: %d x %d\n", width, height);
+        printf("Processing pixel (%d, %d) index %d (in bounds: %d)\n", pixel_coordinate.x, pixel_coordinate.y, pixel_index, pixel_in_bounds);
+    }
 
 	// Load input range for this tile.
 	const auto splat_id_range = splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
@@ -334,8 +339,17 @@ clusterRenderCUDA(
 		pixel_cluster_alpha = CUDART_ONE_FP16;
 	}
 
+    if (pixel_index == DEBUG_PIXEL)
+    {
+        printf("Todo: %d, Rounds: %d\n", todo, rounds);
+    }
+
 	// Iterate over batches until all done or range is complete.
 	for (int i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
+	    if (pixel_index == DEBUG_PIXEL)
+        {
+            printf("Round %d/%d, todo=%d\n", i, rounds, todo);
+        }
 		// Collectively fetch per-splat data from global to shared.
 		const unsigned int progress = i * BLOCK_SIZE + thread_rank;
 		if (splat_id_range.x + progress < splat_id_range.y) {
@@ -372,6 +386,10 @@ clusterRenderCUDA(
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
 			__half sample_alpha = __float2half(min(0.99f, con_o.w * exp(power)));
+		    if (pixel_index == DEBUG_PIXEL)
+		    {
+		        printf("Sample %d alpha = %f\n", sample_splat_id, min(0.99f, con_o.w * exp(power)));
+		    }
 			if (__hlt(sample_alpha, __float2half(1.0f / 255.0f)))
 				continue;
 
@@ -379,6 +397,17 @@ clusterRenderCUDA(
 			const __half sample_r = __float2half(features[sample_splat_id * CHANNELS + 0]);
 			const __half sample_g = __float2half(features[sample_splat_id * CHANNELS + 1]);
 			const __half sample_b = __float2half(features[sample_splat_id * CHANNELS + 2]);
+
+		    if (pixel_index == DEBUG_PIXEL)
+		    {
+		        printf("%d: alpha=%f, r=%f, g=%f, b=%f, depth=%f\n",
+                       sample_splat_id,
+                       __half2float(sample_alpha),
+                       __half2float(sample_r),
+                       __half2float(sample_g),
+                       __half2float(sample_b),
+                       __half2float(collected_splat_depths[j]));
+		    }
 
 			// Pick a target cluster.
 			unsigned short target_cluster_index = 0;
