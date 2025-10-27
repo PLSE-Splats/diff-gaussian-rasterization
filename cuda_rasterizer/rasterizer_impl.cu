@@ -82,23 +82,23 @@ __global__ void duplicateWithKeys(
 		return;
 
 	// Generate no key/value pair for invisible splats.
-	if (splat_radii[splat_id] > 0) {
-		// Find this splat's offset in buffer for writing.
-		uint32_t off = splat_id == 0 ? 0 : tiles_per_splat_offsets[splat_id - 1];
-		uint2 rect_min, rect_max;
+	if (splat_radii[splat_id] <= 0) return;
+    
+    // Find this splat's offset in buffer for writing.
+    uint32_t off = splat_id == 0 ? 0 : tiles_per_splat_offsets[splat_id - 1];
+    uint2 rect_min, rect_max;
 
-		// Compute bounding rect of splat in tile space.
-		getRect(points_xy[splat_id], splat_radii[splat_id], rect_min, rect_max, tile_grid);
+    // Compute bounding rect of splat in tile space.
+    getRect(points_xy[splat_id], splat_radii[splat_id], rect_min, rect_max, tile_grid);
 
-		// For each tile that the bounding rect overlaps, write its tile ID and splat ID to the buffers.
-		for (unsigned int y = rect_min.y; y < rect_max.y; y++) {
-			for (unsigned int x = rect_min.x; x < rect_max.x; x++) {
-				tile_id_unsorted[off] = y * tile_grid.x + x;
-				splat_id_unsorted[off] = splat_id;
-				off++;
-			}
-		}
-	}
+    // For each tile that the bounding rect overlaps, write its tile ID and splat ID to the buffers.
+    for (unsigned int y = rect_min.y; y < rect_max.y; y++) {
+        for (unsigned int x = rect_min.x; x < rect_max.x; x++) {
+            tile_id_unsorted[off] = y * tile_grid.x + x;
+            splat_id_unsorted[off] = splat_id;
+            off++;
+        }
+    }
 }
 
 // Calculate the start and end of each tile's range of splats.
