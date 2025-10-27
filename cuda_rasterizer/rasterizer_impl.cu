@@ -102,11 +102,11 @@ __global__ void duplicateWithKeys(
 }
 
 // Calculate the start and end of each tile's range of splats.
-__global__ void identifyTileRanges(const int L, const uint16_t* sorted_tile_ids, ushort2* ranges)
+__global__ void identifyTileRanges(const int L, const uint16_t* sorted_tile_ids, uint2* ranges)
 {
-	const auto tile_splat_pair_index = cg::this_grid().thread_rank();
-	
-	// Skip out-of-bounds pairs.
+    const uint32_t tile_splat_pair_index = cg::this_grid().thread_rank();
+
+    // Skip out-of-bounds pairs.
 	if (tile_splat_pair_index >= L)
 		return;
 
@@ -115,11 +115,11 @@ __global__ void identifyTileRanges(const int L, const uint16_t* sorted_tile_ids,
 	if (tile_splat_pair_index == 0)
 		ranges[tile_id].x = 0;
 	else
-	{
-		uint16_t previous_tile = sorted_tile_ids[tile_splat_pair_index - 1];
-		if (tile_id != previous_tile)
-		{
-			ranges[previous_tile].y = tile_splat_pair_index;
+    {
+        const uint16_t previous_tile_id = sorted_tile_ids[tile_splat_pair_index - 1];
+        if (tile_id != previous_tile_id)
+        {
+            ranges[previous_tile_id].y = tile_splat_pair_index;
 			ranges[tile_id].x = tile_splat_pair_index;
 		}
 	}
@@ -290,23 +290,23 @@ int CudaRasterizer::Rasterizer::forward(
 		d_unsorted_tile_ids,
 		d_unsorted_splat_ids,
 		radii,
-		tile_grid)
-	CHECK_CUDA(, debug)
+        tile_grid)
+    CHECK_CUDA(, debug)
 
-	// Sort by tile ID.
-	void *d_temp_storage = nullptr;
-	size_t temp_storage_bytes = 0;
-	CHECK_CUDA(
+    // Sort by tile ID.
+    void* d_temp_storage = nullptr;
+    size_t temp_storage_bytes = 0;
+    CHECK_CUDA(
 		cub::DeviceRadixSort::SortPairs(
 			d_temp_storage, temp_storage_bytes,
 			d_unsorted_tile_ids, d_sorted_tile_ids,
 			d_unsorted_splat_ids, d_sorted_splat_ids,
-			num_rendered),
-		debug);
+            num_rendered),
+        debug);
 
-	CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes), debug);
+    CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes), debug);
 
-	CHECK_CUDA(
+    CHECK_CUDA(
 		cub::DeviceRadixSort::SortPairs(
 			d_temp_storage, temp_storage_bytes,
 			d_unsorted_tile_ids, d_sorted_tile_ids,
@@ -315,16 +315,38 @@ int CudaRasterizer::Rasterizer::forward(
 		debug);
 
 	// Identify start and end of per-tile workloads in sorted list
-	ushort2 *d_tile_ranges;
-	CHECK_CUDA(cudaMalloc(&d_tile_ranges, tile_grid.x * tile_grid.y * sizeof(ushort2)), debug)
-	CHECK_CUDA(cudaMemset(d_tile_ranges, 0, tile_grid.x * tile_grid.y * sizeof(ushort2)), debug);
+    uint2* d_tile_ranges;
+    CHECK_CUDA(cudaMalloc(&d_tile_ranges, tile_grid.x * tile_grid.y * sizeof(uint2)), debug)
+    CHECK_CUDA(cudaMemset(d_tile_ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
 
-	if (num_rendered > 0)
-		identifyTileRanges <<<(num_rendered + 255) / 256, 256>>>(
-			num_rendered,
-			d_sorted_tile_ids,
-			d_tile_ranges);
-	CHECK_CUDA(, debug)
+    if (num_rendered > 0)
+        identifyTileRanges <<<(num_rendered + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
+            num_rendered,
+            d_sorted_tile_ids,
+            d_tile_ranges);
+    CHECK_CUDA(, debug)
+
+    // Debug: copy and print first up to 2000 elements of the tile ranges (x, y)
+    // Ensure the identifyTileRanges kernel finished
+    CHECK_CUDA(cudaDeviceSynchronize(), debug);
+
+    int64_t num_tiles = (int64_t)tile_grid.x * (int64_t)tile_grid.y;
+    int print_count_tiles = num_tiles > 2000 ? 2000 : (int)num_tiles;
+    if (print_count_tiles > 0)
+    {
+        ushort2* h_tile_ranges = new ushort2[print_count_tiles];
+        CHECK_CUDA(
+            cudaMemcpy(h_tile_ranges, d_tile_ranges, print_count_tiles * sizeof(ushort2), cudaMemcpyDeviceToHost),
+            debug);
+
+        std::cout << "[DEBUG] first " << print_count_tiles << " d_tile_ranges (x, y):\n";
+        for (int i = 0; i < print_count_tiles; ++i)
+        {
+            std::cout << h_tile_ranges[i].x << ", " << h_tile_ranges[i].y << "\n";
+        }
+
+        delete[] h_tile_ranges;
+    }
 
     // Cluster and Render.
     const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
