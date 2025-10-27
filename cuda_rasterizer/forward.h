@@ -22,7 +22,7 @@
 // Clustering parameters.
 #define NUMBER_OF_CLUSTERS 8
 #define MINIMUM_TRANSMITTANCE 0.0001f
-#define DEBUG_PIXEL -1 // 1051640
+#define DEBUG_PIXEL 682741
 
 // Half constants.
 #define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)

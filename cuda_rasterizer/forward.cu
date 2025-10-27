@@ -386,10 +386,6 @@ clusterRenderCUDA(
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
 			__half sample_alpha = __float2half(min(0.99f, con_o.w * exp(power)));
-		    if (pixel_index == DEBUG_PIXEL)
-		    {
-		        printf("Sample %d alpha = %f\n", sample_splat_id, min(0.99f, con_o.w * exp(power)));
-		    }
 			if (__hlt(sample_alpha, __float2half(1.0f / 255.0f)))
 				continue;
 
@@ -507,7 +503,7 @@ clusterRenderCUDA(
 		}
 	}
 
-	// Clustering is complete, need to finalize values and write out.
+	// Clustering is complete, need to finalize values and render.
 
 	// Exit if this thread is not mapped to a valid pixel.
 	if (done)
