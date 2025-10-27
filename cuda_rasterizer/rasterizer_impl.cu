@@ -326,28 +326,6 @@ int CudaRasterizer::Rasterizer::forward(
             d_tile_ranges);
     CHECK_CUDA(, debug)
 
-    // Debug: copy and print first up to 2000 elements of the tile ranges (x, y)
-    // Ensure the identifyTileRanges kernel finished
-    CHECK_CUDA(cudaDeviceSynchronize(), debug);
-
-    int64_t num_tiles = (int64_t)tile_grid.x * (int64_t)tile_grid.y;
-    int print_count_tiles = num_tiles > 2000 ? 2000 : (int)num_tiles;
-    if (print_count_tiles > 0)
-    {
-        ushort2* h_tile_ranges = new ushort2[print_count_tiles];
-        CHECK_CUDA(
-            cudaMemcpy(h_tile_ranges, d_tile_ranges, print_count_tiles * sizeof(ushort2), cudaMemcpyDeviceToHost),
-            debug);
-
-        std::cout << "[DEBUG] first " << print_count_tiles << " d_tile_ranges (x, y):\n";
-        for (int i = 0; i < print_count_tiles; ++i)
-        {
-            std::cout << h_tile_ranges[i].x << ", " << h_tile_ranges[i].y << "\n";
-        }
-
-        delete[] h_tile_ranges;
-    }
-
     // Cluster and Render.
     const float *features = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	CHECK_CUDA(
