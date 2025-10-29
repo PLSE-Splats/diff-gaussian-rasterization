@@ -17,12 +17,19 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+
+// Half precision options.
+#define USE_HALF
+
+#ifdef USE_HALF
 #include "cuda_fp16.h"
+#endif
+
 
 // Clustering parameters.
 #define NUMBER_OF_CLUSTERS 8
 #define MINIMUM_TRANSMITTANCE 0.0001f
-#define DEBUG_PIXEL 682741
+#define DEBUG_PIXEL -1 //682741
 
 // Half constants.
 #define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
