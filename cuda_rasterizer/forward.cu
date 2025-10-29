@@ -437,26 +437,24 @@ clusterRenderCUDA(
 			{
 				__half current_closest_depth_distance = CUDART_MAX_NORMAL_FP16;
 				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-					// Use the cluster if it's an exact match.
-					if (__heq(pixel_cluster_depths[cluster_index], collected_splat_depths[j]))
-					{
-						target_cluster_index = cluster_index;
-						break;
+                    const __half distance_to_cluster = __habs(
+                        __hsub(
+                            pixel_cluster_depths[cluster_index],
+                            collected_splat_depths[j]
+                        )
+                    );
+                    // Use the cluster if it's an exact match.
+                    if (__hlt(distance_to_cluster, __float2half(0.001f)))
+                    {
+                        target_cluster_index = cluster_index;
+                        break;
 					}
 
 					// Otherwise, find the closest in depth.
 					// | cluster depth - sample depth | < current_closest_depth_distance
-					if (__hlt(
-							__habs(
-								__hsub(
-									pixel_cluster_depths[cluster_index],
-									collected_splat_depths[j])
-							),
-							current_closest_depth_distance
-						)
-					)
+                    if (__hlt(distance_to_cluster, current_closest_depth_distance))
 					{
-						current_closest_depth_distance = pixel_cluster_depths[cluster_index];
+						current_closest_depth_distance = distance_to_cluster;
 						target_cluster_index = cluster_index;
 					}
 				}
