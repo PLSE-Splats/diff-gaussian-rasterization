@@ -312,7 +312,7 @@ clusterRenderCUDA(
 
 	// Load input range for this tile.
 	const auto splat_id_range = splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
-	int todo = splat_id_range.y - splat_id_range.x;
+    int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
 	const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
 	// Allocate storage for batches of collectively fetched data.
@@ -345,13 +345,13 @@ clusterRenderCUDA(
     }
 
 	// Iterate over batches until all done or range is complete.
-	for (int i = 0; i < rounds; ++i, todo -= BLOCK_SIZE) {
+	for (int batch_index = 0; batch_index < rounds; ++batch_index, todo -= BLOCK_SIZE) {
 	    if (pixel_index == DEBUG_PIXEL)
         {
-            printf("Round %d/%d, todo=%d\n", i, rounds, todo);
+            printf("Round %d/%d, todo=%d\n", batch_index, rounds, todo);
         }
 		// Collectively fetch per-splat data from global to shared.
-		const unsigned int progress = i * BLOCK_SIZE + thread_rank;
+		const unsigned int progress = batch_index * BLOCK_SIZE + thread_rank;
 		if (splat_id_range.x + progress < splat_id_range.y) {
 			const uint32_t collected_splat_id = splat_ids[splat_id_range.x + progress];
 			collected_splat_ids[thread_rank] = collected_splat_id;
@@ -363,9 +363,9 @@ clusterRenderCUDA(
 
 		// Iterate over current batch (per thread).
 		// Does nothing if the thread is not mapped to a valid pixel (done).
-		for (int j = 0; !done && j < min(BLOCK_SIZE, todo); ++j) {
+		for (int sample_index = 0; !done && sample_index < min(BLOCK_SIZE, todo); ++sample_index) {
 			// Collect sample ID.
-			const uint32_t sample_splat_id = collected_splat_ids[j];
+			const uint32_t sample_splat_id = collected_splat_ids[sample_index];
 
 			// Keep track of current position in range.
 			contributor++;
@@ -374,9 +374,9 @@ clusterRenderCUDA(
 
 			// Resample using conic matrix (cf. "Surface 
 			// Splatting" by Zwicker et al., 2001)
-			float2 xy = collected_means_2d[j];
+			float2 xy = collected_means_2d[sample_index];
 			float2 d = {xy.x - static_cast<float>(pixel_coordinate.x), xy.y - static_cast<float>(pixel_coordinate.y)};
-			float4 con_o = collected_conic_opacity[j];
+			float4 con_o = collected_conic_opacity[sample_index];
 			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
 			if (power > 0.0f)
 				continue;
@@ -394,6 +394,9 @@ clusterRenderCUDA(
 			const __half sample_g = __float2half(features[sample_splat_id * CHANNELS + 1]);
 			const __half sample_b = __float2half(features[sample_splat_id * CHANNELS + 2]);
 
+		    // Collect sample depth.
+		    const __half sample_depth = collected_splat_depths[sample_index];
+
 		    if (pixel_index == DEBUG_PIXEL)
 		    {
 		        printf("%d: alpha=%f, r=%f, g=%f, b=%f, depth=%f\n",
@@ -402,7 +405,7 @@ clusterRenderCUDA(
                        __half2float(sample_r),
                        __half2float(sample_g),
                        __half2float(sample_b),
-                       __half2float(collected_splat_depths[j]));
+                       __half2float(collected_splat_depths[sample_index]));
 		    }
 
 			// Pick a target cluster.
@@ -420,7 +423,7 @@ clusterRenderCUDA(
 				for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index)
 				{
 					// Use the cluster if it's an exact match.
-					if (__heq(pixel_cluster_depths[cluster_index], collected_splat_depths[j]))
+					if (__heq(pixel_cluster_depths[cluster_index],  sample_depth))
 					{
 						target_cluster_index = cluster_index;
 						break;
@@ -440,16 +443,9 @@ clusterRenderCUDA(
                     const __half distance_to_cluster = __habs(
                         __hsub(
                             pixel_cluster_depths[cluster_index],
-                            collected_splat_depths[j]
+                            sample_depth
                         )
                     );
-                    // Use the cluster if it's an exact match.
-                    if (__hlt(distance_to_cluster, __float2half(0.001f)))
-                    {
-                        target_cluster_index = cluster_index;
-                        break;
-					}
-
 					// Otherwise, find the closest in depth.
 					// | cluster depth - sample depth | < current_closest_depth_distance
                     if (__hlt(distance_to_cluster, current_closest_depth_distance))
@@ -494,11 +490,14 @@ clusterRenderCUDA(
 			pixel_cluster_depths[target_cluster_index] = __hadd(
 				current_depth,
 				__hdiv(
-					__hsub(collected_splat_depths[target_cluster_index], current_depth),
+					__hsub(sample_depth, current_depth),
 					pixel_cluster_splat_counts[target_cluster_index]
 				)
 			);
 		}
+
+	    // Sync before next ingest batch.
+	    block.sync();
 	}
 
 	// Clustering is complete, need to finalize values and render.
