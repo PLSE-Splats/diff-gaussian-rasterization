@@ -347,6 +347,14 @@ int CudaRasterizer::Rasterizer::forward(
             out_color),
 		debug);
 
+    // Cleanup.
+    CHECK_CUDA(cudaFree(d_unsorted_tile_ids), debug)
+    CHECK_CUDA(cudaFree(d_sorted_tile_ids), debug)
+    CHECK_CUDA(cudaFree(d_unsorted_splat_ids), debug)
+    CHECK_CUDA(cudaFree(d_sorted_splat_ids), debug)
+    CHECK_CUDA(cudaFree(d_temp_storage), debug)
+    CHECK_CUDA(cudaFree(d_tile_ranges), debug)
+
 	return num_rendered;
 }
 
