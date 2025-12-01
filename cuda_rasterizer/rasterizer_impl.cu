@@ -168,6 +168,21 @@ CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, s
 	return img;
 }
 
+CudaRasterizer::GroupingState CudaRasterizer::GroupingState::fromChunk(char*& chunk, size_t P)
+{
+    GroupingState grouping;
+    obtain(chunk, grouping.splat_ids, P, 128);
+    obtain(chunk, grouping.unsorted_splat_ids, P, 128);
+    obtain(chunk, grouping.tile_ids, P, 128);
+    obtain(chunk, grouping.unsorted_tile_ids, P, 128);
+    cub::DeviceRadixSort::SortPairs(
+        nullptr, grouping.grouping_size,
+        grouping.unsorted_tile_ids, grouping.tile_ids,
+        grouping.unsorted_splat_ids, grouping.splat_ids, P);
+    obtain(chunk, grouping.grouping_space, grouping.grouping_size, 128);
+    return grouping;
+}
+
 CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chunk, size_t P)
 {
 	BinningState binning;
@@ -187,8 +202,8 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
 // of Gaussians.
 int CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
-	std::function<char* (size_t)> binningBuffer,
-	std::function<char* (size_t)> imageBuffer,
+    std::function<char*(size_t)> groupingBuffer,
+    std::function<char* (size_t)> imageBuffer,
 	const int P, int D, int M,
 	const float* background,
 	const int width, int height,
@@ -271,59 +286,42 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
-	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
+    CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
 
-	// Allocate space for unsorted keys/values, sorted keys/values.
-	uint16_t *d_unsorted_tile_ids, *d_sorted_tile_ids;
-	CHECK_CUDA(cudaMalloc(&d_unsorted_tile_ids, num_rendered * sizeof(uint16_t)), debug)
-	CHECK_CUDA(cudaMalloc(&d_sorted_tile_ids, num_rendered * sizeof(uint16_t)), debug)
-
-	uint32_t *d_unsorted_splat_ids, *d_sorted_splat_ids;
-	CHECK_CUDA(cudaMalloc(&d_unsorted_splat_ids, num_rendered * sizeof(uint32_t)), debug)
-	CHECK_CUDA(cudaMalloc(&d_sorted_splat_ids, num_rendered * sizeof(uint32_t)), debug)
+    // Allocate space for grouping splats into tiles.
+    size_t grouping_chunk_size = required<GroupingState>(num_rendered);
+    char* grouping_chunkptr = groupingBuffer(grouping_chunk_size);
+    GroupingState groupState = GroupingState::fromChunk(grouping_chunkptr, num_rendered);
 
 	// Populate unsorted key/value buffers with tile IDs and splat IDs.
 	duplicateWithKeys << <(P + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE >> > (
 		P,
 		geomState.means2D,
 		geomState.point_offsets,
-		d_unsorted_tile_ids,
-		d_unsorted_splat_ids,
+        groupState.unsorted_tile_ids,
+        groupState.unsorted_splat_ids,
 		radii,
         tile_grid)
     CHECK_CUDA(, debug)
 
-    // Sort by tile ID.
-    void* d_temp_storage = nullptr;
-    size_t temp_storage_bytes = 0;
+
+    // Group splats into tiles by sorting them by tile ID (16-bit radix).
     CHECK_CUDA(
 		cub::DeviceRadixSort::SortPairs(
-			d_temp_storage, temp_storage_bytes,
-			d_unsorted_tile_ids, d_sorted_tile_ids,
-			d_unsorted_splat_ids, d_sorted_splat_ids,
-            num_rendered),
-        debug);
-
-    CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes), debug);
-
-    CHECK_CUDA(
-		cub::DeviceRadixSort::SortPairs(
-			d_temp_storage, temp_storage_bytes,
-			d_unsorted_tile_ids, d_sorted_tile_ids,
-			d_unsorted_splat_ids, d_sorted_splat_ids,
+            groupState.grouping_space, groupState.grouping_size,
+            groupState.unsorted_tile_ids, groupState.tile_ids,
+            groupState.unsorted_splat_ids, groupState.splat_ids,
 			num_rendered),
 		debug);
 
 	// Identify start and end of per-tile workloads in sorted list
-    uint2* d_tile_ranges;
-    CHECK_CUDA(cudaMalloc(&d_tile_ranges, tile_grid.x * tile_grid.y * sizeof(uint2)), debug)
-    CHECK_CUDA(cudaMemset(d_tile_ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
+    CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
 
     if (num_rendered > 0)
         identifyTileRanges <<<(num_rendered + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
             num_rendered,
-            d_sorted_tile_ids,
-            d_tile_ranges);
+            groupState.tile_ids,
+            imgState.ranges);
     CHECK_CUDA(, debug)
 
     // Cluster and Render.
@@ -334,8 +332,8 @@ int CudaRasterizer::Rasterizer::forward(
 			block,
 			width,
 			height,
-			d_sorted_splat_ids,
-			d_tile_ranges,
+			groupState.splat_ids,
+			imgState.ranges,
 			geomState.means2D,
 			geomState.conic_opacity,
 			geomState.depths,
@@ -346,14 +344,6 @@ int CudaRasterizer::Rasterizer::forward(
             depth,
             out_color),
 		debug);
-
-    // Cleanup.
-    CHECK_CUDA(cudaFree(d_unsorted_tile_ids), debug)
-    CHECK_CUDA(cudaFree(d_sorted_tile_ids), debug)
-    CHECK_CUDA(cudaFree(d_unsorted_splat_ids), debug)
-    CHECK_CUDA(cudaFree(d_sorted_splat_ids), debug)
-    CHECK_CUDA(cudaFree(d_temp_storage), debug)
-    CHECK_CUDA(cudaFree(d_tile_ranges), debug)
 
 	return num_rendered;
 }

@@ -52,6 +52,18 @@ namespace CudaRasterizer
 		static ImageState fromChunk(char*& chunk, size_t N);
 	};
 
+    struct GroupingState
+    {
+        size_t grouping_size;
+        uint16_t* unsorted_tile_ids;
+        uint16_t* tile_ids;
+        uint32_t* unsorted_splat_ids;
+        uint32_t* splat_ids;
+        void* grouping_space;
+        
+		static GroupingState fromChunk(char*& chunk, size_t P);
+    };
+
 	struct BinningState
 	{
 		size_t sorting_size;
