@@ -411,29 +411,30 @@ clusterRenderCUDA(
 			// Pick a target cluster.
 			unsigned short target_cluster_index = 0;
 
-			// Use the next uninitialize cluster.
+			// Use the next uninitialized cluster.
 			if (uninitialized_cluster_index < NUMBER_OF_CLUSTERS) {
 				// Start with the next open cluster index.
 				target_cluster_index = uninitialized_cluster_index;
 
-				// Increment the uninitialized cluster if this is the first sample.
-				if (uninitialized_cluster_index == 0)
-					uninitialized_cluster_index++;
-
-				for (int cluster_index = 0; cluster_index < target_cluster_index; ++cluster_index)
+			    // Check for any exact matches before the uninitialized index.
+			    bool found_exact_match = false;
+				for (int cluster_index = 0; cluster_index < uninitialized_cluster_index; ++cluster_index)
 				{
 					// Use the cluster if it's an exact match.
 					if (__heq(pixel_cluster_depths[cluster_index],  sample_depth))
 					{
 						target_cluster_index = cluster_index;
+					    found_exact_match = true;
 						break;
 					}
-
-					// If no matches were found, increment uninitialized index for the next pass.
-					if (cluster_index == uninitialized_cluster_index - 1) {
-						uninitialized_cluster_index++;
-					}
 				}
+
+			    // No exact match found, so will use the uninitialized cluster.
+			    if (!found_exact_match)
+			    {
+			        // Move to next uninitialized cluster for next time.
+			        uninitialized_cluster_index++;
+			    }
 			}
 			// Clusters are initialized, use the closest in depth.
 			else
