@@ -317,7 +317,7 @@ clusterRenderCUDA(
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
-	__shared__ __half collected_splat_depths[BLOCK_SIZE];
+	__shared__ float collected_splat_depths[BLOCK_SIZE];
 	__shared__ float2 collected_means_2d[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 
@@ -325,7 +325,7 @@ clusterRenderCUDA(
 	uint32_t contributor = 0;
 
 	// Local cluster data.
-	__half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
+	float pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
 	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
@@ -355,7 +355,7 @@ clusterRenderCUDA(
 		if (splat_id_range.x + progress < splat_id_range.y) {
 			const uint32_t collected_splat_id = splat_ids[splat_id_range.x + progress];
 			collected_splat_ids[thread_rank] = collected_splat_id;
-			collected_splat_depths[thread_rank] = __float2half(depths[collected_splat_id]);
+			collected_splat_depths[thread_rank] = depths[collected_splat_id];
 			collected_means_2d[thread_rank] = means_2d[collected_splat_id];
 			collected_conic_opacity[thread_rank] = conic_opacity[collected_splat_id];
 		}
@@ -395,7 +395,7 @@ clusterRenderCUDA(
 			const __half sample_b = __float2half(features[sample_splat_id * CHANNELS + 2]);
 
 		    // Collect sample depth.
-		    const __half sample_depth = collected_splat_depths[sample_index];
+		    const float sample_depth = collected_splat_depths[sample_index];
 
 		    if (pixel_index == DEBUG_PIXEL)
 		    {
@@ -405,7 +405,7 @@ clusterRenderCUDA(
                        __half2float(sample_r),
                        __half2float(sample_g),
                        __half2float(sample_b),
-                       __half2float(collected_splat_depths[sample_index]));
+                       collected_splat_depths[sample_index]);
 		    }
 
 			// Pick a target cluster.
@@ -421,7 +421,7 @@ clusterRenderCUDA(
 				for (int cluster_index = 0; cluster_index < uninitialized_cluster_index; ++cluster_index)
 				{
 					// Use the cluster if it's an exact match.
-					if (__heq(pixel_cluster_depths[cluster_index],  sample_depth))
+					if (pixel_cluster_depths[cluster_index] == sample_depth)
 					{
 						target_cluster_index = cluster_index;
 					    found_exact_match = true;
@@ -439,17 +439,14 @@ clusterRenderCUDA(
 			// Clusters are initialized, use the closest in depth.
 			else
 			{
-				__half current_closest_depth_distance = CUDART_MAX_NORMAL_FP16;
+				float current_closest_depth_distance = FLT_MAX;
 				for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS; ++cluster_index) {
-                    const __half distance_to_cluster = __habs(
-                        __hsub(
-                            pixel_cluster_depths[cluster_index],
-                            sample_depth
-                        )
+                    const float distance_to_cluster = fabsf(
+                        pixel_cluster_depths[cluster_index] - sample_depth
                     );
 					// Otherwise, find the closest in depth.
 					// | cluster depth - sample depth | < current_closest_depth_distance
-                    if (__hlt(distance_to_cluster, current_closest_depth_distance))
+                    if (distance_to_cluster < current_closest_depth_distance)
 					{
 						current_closest_depth_distance = distance_to_cluster;
 						target_cluster_index = cluster_index;
@@ -487,14 +484,9 @@ clusterRenderCUDA(
 			);
 
 			// Update cluster depth.
-			const __half current_depth = pixel_cluster_depths[target_cluster_index];
-			pixel_cluster_depths[target_cluster_index] = __hadd(
-				current_depth,
-				__hdiv(
-					__hsub(sample_depth, current_depth),
-					pixel_cluster_splat_counts[target_cluster_index]
-				)
-			);
+			const float current_depth = pixel_cluster_depths[target_cluster_index];
+            const float count_f = __half2float(pixel_cluster_splat_counts[target_cluster_index]);
+            pixel_cluster_depths[target_cluster_index] = current_depth + (sample_depth - current_depth) / count_f;
 		}
 
 	    // Sync before next ingest batch.
@@ -514,20 +506,20 @@ clusterRenderCUDA(
 
 	// Initialize rendering variables.
 	__half pixel_transmittance = CUDART_ONE_FP16;
-	__half expected_invdepth = CUDART_ZERO_FP16;
+	float expected_invdepth = 0.0f;
 	__half pixel_color[CHANNELS] = {};
 
     // For each cluster, convert transmittance accumulator to alpha, normalize RGB, and perform alpha over.
-    __half lowest_depth = CUDART_ZERO_FP16;
+    float lowest_depth = 0.0f;
 	for (int output_cluster_index = 0; output_cluster_index < NUMBER_OF_CLUSTERS; ++output_cluster_index)
 	{
 		// Find the next lowest depth such that lowest_depth < pixel_cluster_depths[candidate_index] < current_lowest_depth.
 		int collection_index = 0;
-		__half current_lowest_depth = CUDART_MAX_NORMAL_FP16;
+		float current_lowest_depth = FLT_MAX;
 		for (int candidate_index = 0; candidate_index < NUMBER_OF_CLUSTERS; ++candidate_index)
 		{
-			if (__hlt(pixel_cluster_depths[candidate_index], current_lowest_depth) && __hgt(
-				pixel_cluster_depths[candidate_index], lowest_depth))
+			if (pixel_cluster_depths[candidate_index] < current_lowest_depth &&
+                pixel_cluster_depths[candidate_index] > lowest_depth)
 			{
 				current_lowest_depth = pixel_cluster_depths[candidate_index];
 				collection_index = candidate_index;
@@ -546,7 +538,7 @@ clusterRenderCUDA(
                    __half2float(pixel_color[2]));
             printf("Input cluster %d: depth=%f, cluster transmittance=%f, alpha_sum=%f\n",
                    collection_index,
-                   __half2float(pixel_cluster_depths[collection_index]),
+                   pixel_cluster_depths[collection_index],
                    __half2float(pixel_cluster_alphas[collection_index]),
                    __half2float(pixel_cluster_alpha_sums[collection_index]));
             printf("======================\n");
@@ -581,9 +573,9 @@ clusterRenderCUDA(
 
         // Update invdepth.
         if (invdepth)
-            expected_invdepth = __hfma(
-                __hmul(hrcp(pixel_cluster_depths[collection_index]), cluster_alpha),
-                pixel_transmittance,
+            expected_invdepth = fmaf(
+                (1.0f / pixel_cluster_depths[collection_index]) * __half2float(cluster_alpha),
+                __half2float(pixel_transmittance),
                 expected_invdepth
             );
 
@@ -607,7 +599,7 @@ clusterRenderCUDA(
 	// Write to output color, adding background.
     final_transmittance[pixel_index] = __half2float(pixel_transmittance);
     if (invdepth)
-        invdepth[pixel_index] = __half2float(expected_invdepth);
+        invdepth[pixel_index] = expected_invdepth;
 
     for (int channel = 0; channel < CHANNELS; ++channel)
 	{
