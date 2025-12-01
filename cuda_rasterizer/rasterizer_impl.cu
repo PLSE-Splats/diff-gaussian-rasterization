@@ -289,7 +289,7 @@ int CudaRasterizer::Rasterizer::forward(
     CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
 
     // Allocate space for grouping splats into tiles.
-    size_t grouping_chunk_size = required<GroupingState>(num_rendered);
+    const size_t grouping_chunk_size = required<GroupingState>(num_rendered);
     char* grouping_chunkptr = groupingBuffer(grouping_chunk_size);
     GroupingState groupState = GroupingState::fromChunk(grouping_chunkptr, num_rendered);
 

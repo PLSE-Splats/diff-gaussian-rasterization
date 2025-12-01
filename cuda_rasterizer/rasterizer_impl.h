@@ -59,7 +59,7 @@ namespace CudaRasterizer
         uint16_t* tile_ids;
         uint32_t* unsorted_splat_ids;
         uint32_t* splat_ids;
-        void* grouping_space;
+        char* grouping_space;
         
 		static GroupingState fromChunk(char*& chunk, size_t P);
     };
