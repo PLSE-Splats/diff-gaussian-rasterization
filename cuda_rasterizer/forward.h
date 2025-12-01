@@ -19,7 +19,7 @@
 #include <glm/glm.hpp>
 
 // Clustering parameters.
-#define NUMBER_OF_CLUSTERS 8
+#define NUMBER_OF_CLUSTERS 12
 #define MINIMUM_TRANSMITTANCE 0.0001f
 #define DEBUG_PIXEL -1 //682741
 
