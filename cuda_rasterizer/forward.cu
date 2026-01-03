@@ -485,7 +485,7 @@ clusterRenderCUDA(
 
 			// Update cluster depth.
 			const float current_depth = pixel_cluster_depths[target_cluster_index];
-            constexpr float memory_weight = 0.25f;
+            constexpr float memory_weight = 0.01f;
             // const float count_f = __half2float(pixel_cluster_splat_counts[target_cluster_index]);
             pixel_cluster_depths[target_cluster_index] = current_depth + (sample_depth - current_depth) * memory_weight;
 		}
