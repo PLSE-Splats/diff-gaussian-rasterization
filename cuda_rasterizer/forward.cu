@@ -304,11 +304,6 @@ clusterRenderCUDA(
 	// Compute if this thread is associated with a visible pixel.
 	const bool pixel_in_bounds = pixel_coordinate.x < width && pixel_coordinate.y < height;
 	bool done = !pixel_in_bounds;
-    if (pixel_index == DEBUG_PIXEL)
-    {
-        printf("Image resolution: %d x %d\n", width, height);
-        printf("Processing pixel (%d, %d) index %d (in bounds: %d)\n", pixel_coordinate.x, pixel_coordinate.y, pixel_index, pixel_in_bounds);
-    }
 
 	// Load input range for this tile.
 	const auto splat_id_range = splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
@@ -339,17 +334,8 @@ clusterRenderCUDA(
 		pixel_cluster_alpha = CUDART_ONE_FP16;
 	}
 
-    if (pixel_index == DEBUG_PIXEL)
-    {
-        printf("Todo: %d, Rounds: %d\n", todo, rounds);
-    }
-
 	// Iterate over batches until all done or range is complete.
 	for (int batch_index = 0; batch_index < rounds; ++batch_index, todo -= BLOCK_SIZE) {
-	    if (pixel_index == DEBUG_PIXEL)
-        {
-            printf("Round %d/%d, todo=%d\n", batch_index, rounds, todo);
-        }
 		// Collectively fetch per-splat data from global to shared.
 		const unsigned int progress = batch_index * BLOCK_SIZE + thread_rank;
 		if (splat_id_range.x + progress < splat_id_range.y) {
@@ -396,17 +382,6 @@ clusterRenderCUDA(
 
 		    // Collect sample depth.
 		    const float sample_depth = collected_splat_depths[sample_index];
-
-		    if (pixel_index == DEBUG_PIXEL)
-		    {
-		        printf("%d: alpha=%f, r=%f, g=%f, b=%f, depth=%f\n",
-                       sample_splat_id,
-                       __half2float(sample_alpha),
-                       __half2float(sample_r),
-                       __half2float(sample_g),
-                       __half2float(sample_b),
-                       collected_splat_depths[sample_index]);
-		    }
 
 			// Pick a target cluster.
 			unsigned short target_cluster_index = 0;
@@ -529,21 +504,6 @@ clusterRenderCUDA(
 		// Update the lowest depth for next pass.
 		lowest_depth = current_lowest_depth;
 
-        if (pixel_index == DEBUG_PIXEL)
-        {
-            printf("Pixel transmittance: %f\n", __half2float(pixel_transmittance));
-            printf("Pixel color: %f, %f, %f\n",
-                   __half2float(pixel_color[0]),
-                   __half2float(pixel_color[1]),
-                   __half2float(pixel_color[2]));
-            printf("Input cluster %d: depth=%f, cluster transmittance=%f, alpha_sum=%f\n",
-                   collection_index,
-                   pixel_cluster_depths[collection_index],
-                   __half2float(pixel_cluster_alphas[collection_index]),
-                   __half2float(pixel_cluster_alpha_sums[collection_index]));
-            printf("======================\n");
-        }
-
         // Convert cluster transmittance to alpha.
         const __half cluster_alpha = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
 
@@ -554,17 +514,6 @@ clusterRenderCUDA(
 		const __half cluster_red = __hmul(alpha_sum_reciprocal, pixel_cluster_reds[collection_index]);
 		const __half cluster_green = __hmul(alpha_sum_reciprocal, pixel_cluster_greens[collection_index]);
 		const __half cluster_blue = __hmul(alpha_sum_reciprocal, pixel_cluster_blues[collection_index]);
-
-        if (pixel_index == DEBUG_PIXEL)
-        {
-            printf("Cluster alpha: %f\n", __half2float(cluster_alpha));
-            printf("Alpha sum reciprocal: %f\n", __half2float(alpha_sum_reciprocal));
-            printf("Cluster premultiplied color: %f, %f, %f\n",
-                   __half2float(cluster_red),
-                   __half2float(cluster_green),
-                   __half2float(cluster_blue));
-            printf("======================\n");
-        }
 
 		// Contribute colors to pixel.
 		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
@@ -584,16 +533,6 @@ clusterRenderCUDA(
             pixel_transmittance,
             __hsub(CUDART_ONE_FP16, __hmin(CUDART_ONE_FP16, cluster_alpha))
         );
-        if (pixel_index == DEBUG_PIXEL)
-        {
-            printf("Pixel color after cluster %d: %f, %f, %f\n",
-                   collection_index,
-                   __half2float(pixel_color[0]),
-                   __half2float(pixel_color[1]),
-                   __half2float(pixel_color[2]));
-            printf("Pixel transmittance: %f\n", __half2float(pixel_transmittance));
-            printf("======================\n\n");
-        }
 	}
 	
 	// Write to output color, adding background.
@@ -605,11 +544,6 @@ clusterRenderCUDA(
 	{
 		out_color[channel * height * width + pixel_index] = __half2float(pixel_color[channel]) + __half2float(
 			pixel_transmittance) * bg_color[channel];
-
-        if (pixel_index == DEBUG_PIXEL)
-        {
-            printf("%f, ", out_color[channel * height * width + pixel_index]);
-        }
 	}
 }
 
