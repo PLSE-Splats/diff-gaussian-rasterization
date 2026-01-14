@@ -45,6 +45,60 @@ struct GeometryState {
   static GeometryState fromChunk(char*& chunk, size_t P);
 };
 
+/**
+ * Clustering data structure.
+ *
+ * Organized in cluster layers of pixels (i.e. i and i+1 are the same cluster
+ * level for pixels i and i+1).
+ */
+struct ClusterState {
+  /**
+   * Cluster depths.
+   */
+  __half* depths;
+
+  /**
+   * Number of splats per cluster.
+   */
+  unsigned short* splat_counts;
+
+  /**
+   * Sum of alpha values during clustering.
+   */
+  __half* alpha_sums;
+
+  /**
+   * Final alpha of the cluster.
+   */
+  __half* alphas;
+
+  /**
+   * Final red value of the cluster.
+   */
+  __half* reds;
+
+  /**
+   * Final green value of the cluster.
+   */
+  __half* greens;
+
+  /**
+   * Final blue value of the cluster.
+   */
+  __half* blues;
+
+  /**
+   * Allocate ClusterState structure from memory chunk.
+   *
+   * @param chunk Memory chunk location.
+   * @param pixels Number of pixels in the image (size of each layer).
+   * @param clusters Number of clusters per pixel.
+   * @return Allocated ClusterState structure.
+   */
+  static ClusterState fromChunk(char*& chunk, size_t pixels,
+                                unsigned short clusters);
+};
+
 struct ImageState {
   uint2* ranges;
   uint32_t* n_contrib;
