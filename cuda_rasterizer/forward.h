@@ -18,16 +18,6 @@
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 
-// Clustering parameters.
-#define NUMBER_OF_CLUSTERS 12
-#define MINIMUM_TRANSMITTANCE 0.0001f
-#define DEBUG_PIXEL -1 //682741
-
-// Half constants.
-#define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
-#define CUDART_ONE_FP16 __ushort_as_half((unsigned short)0x3C00U)
-#define CUDART_ZERO_FP16 __ushort_as_half((unsigned short)0x0000U)
-
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
