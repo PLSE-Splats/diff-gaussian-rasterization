@@ -11,19 +11,15 @@
 
 #include <cuda.h>
 
-#include <algorithm>
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #include <fstream>
 #include <iostream>
-#include <numeric>
 
 #include "cuda_runtime.h"
-#include "device_launch_parameters.h"
 #include "rasterizer_impl.h"
 #define GLM_FORCE_CUDA
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
 
 #include <glm/glm.hpp>
 namespace cg = cooperative_groups;
