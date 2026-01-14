@@ -10,7 +10,6 @@
  */
 
 #include "forward.h"
-#include "cuda_fp16.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -321,17 +320,18 @@ clusterRenderCUDA(
 
 	// Local cluster data.
 	float pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
-	__half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
-	__half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
-	__half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
-	__half pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
-	__half pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
-	__half pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
-	unsigned short uninitialized_cluster_index = 0;
+    float pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
+    float pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
+    float pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
+    float pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
+    float pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
+    float pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
+    unsigned short uninitialized_cluster_index = 0;
 
 	// Initialize pixel_cluster_alphas to 1.0 (transmittance accumulator starts at 1).
-	for (auto & pixel_cluster_alpha : pixel_cluster_alphas) {
-		pixel_cluster_alpha = CUDART_ONE_FP16;
+	for (auto & pixel_cluster_alpha : pixel_cluster_alphas)
+    {
+        pixel_cluster_alpha = 1.0f;
 	}
 
 	// Iterate over batches until all done or range is complete.
@@ -370,15 +370,15 @@ clusterRenderCUDA(
 			// Eq. (2) from 3D Gaussian splatting paper.
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
-			// Avoid numerical instabilities (see paper appendix). 
-			__half sample_alpha = __float2half(min(0.99f, con_o.w * exp(power)));
-			if (__hlt(sample_alpha, __float2half(1.0f / 255.0f)))
-				continue;
+            // Avoid numerical instabilities (see paper appendix).
+            float sample_alpha = min(0.99f, con_o.w * exp(power));
+            if (sample_alpha < 1.0f / 255.0f)
+                continue;
 
-			// Collect color.
-			const __half sample_r = __float2half(features[sample_splat_id * CHANNELS + 0]);
-			const __half sample_g = __float2half(features[sample_splat_id * CHANNELS + 1]);
-			const __half sample_b = __float2half(features[sample_splat_id * CHANNELS + 2]);
+            // Collect color.
+            const float sample_r = features[sample_splat_id * CHANNELS + 0];
+            const float sample_g = features[sample_splat_id * CHANNELS + 1];
+            const float sample_b = features[sample_splat_id * CHANNELS + 2];
 
 		    // Collect sample depth.
 		    const float sample_depth = collected_splat_depths[sample_index];
@@ -424,53 +424,38 @@ clusterRenderCUDA(
                     if (distance_to_cluster < current_closest_depth_distance)
 					{
 						current_closest_depth_distance = distance_to_cluster;
-						target_cluster_index = cluster_index;
-					}
-				}
-			}
+                        target_cluster_index = cluster_index;
+                    }
+                }
+            }
 
-			// Target cluster found. Add the splat to it.
-			pixel_cluster_splat_counts[target_cluster_index] = __hadd(
-				pixel_cluster_splat_counts[target_cluster_index],
-				CUDART_ONE_FP16
-			);
-			pixel_cluster_alpha_sums[target_cluster_index] = __hadd(
-				pixel_cluster_alpha_sums[target_cluster_index],
-				sample_alpha
-			);
-			pixel_cluster_alphas[target_cluster_index] = __hmul(
-				pixel_cluster_alphas[target_cluster_index],
-				__hsub(CUDART_ONE_FP16, sample_alpha)
-			);
-			pixel_cluster_reds[target_cluster_index] = __hfma(
-				sample_alpha,
-				sample_r,
-				pixel_cluster_reds[target_cluster_index]
-			);
-			pixel_cluster_greens[target_cluster_index] = __hfma(
-				sample_alpha,
-				sample_g,
-				pixel_cluster_greens[target_cluster_index]
-			);
-			pixel_cluster_blues[target_cluster_index] = __hfma(
-				sample_alpha,
-				sample_b,
-				pixel_cluster_blues[target_cluster_index]
-			);
+            // Target cluster found. Add the splat to it.
+            pixel_cluster_splat_counts[target_cluster_index] =
+                pixel_cluster_splat_counts[target_cluster_index] + 1.0f;
+            pixel_cluster_alpha_sums[target_cluster_index] =
+                pixel_cluster_alpha_sums[target_cluster_index] + sample_alpha;
+            pixel_cluster_alphas[target_cluster_index] =
+                pixel_cluster_alphas[target_cluster_index] * (1.0f - sample_alpha);
+            pixel_cluster_reds[target_cluster_index] =
+                fmaf(sample_alpha, sample_r, pixel_cluster_reds[target_cluster_index]);
+            pixel_cluster_greens[target_cluster_index] =
+                fmaf(sample_alpha, sample_g, pixel_cluster_greens[target_cluster_index]);
+            pixel_cluster_blues[target_cluster_index] =
+				fmaf(sample_alpha, sample_b, pixel_cluster_blues[target_cluster_index]);
 
 			// Update cluster depth.
 			const float current_depth = pixel_cluster_depths[target_cluster_index];
-            const float count_f = __half2float(pixel_cluster_splat_counts[target_cluster_index]);
+            const float count_f = pixel_cluster_splat_counts[target_cluster_index];
             pixel_cluster_depths[target_cluster_index] = current_depth + (sample_depth - current_depth) / count_f;
 		}
 
 	    // Sync before next ingest batch.
 	    block.sync();
-	}
+    }
 
-	// Clustering is complete, need to finalize values and render.
+    // Clustering is complete, need to finalize values and render.
 
-	// Exit if this thread is not mapped to a valid pixel.
+    // Exit if this thread is not mapped to a valid pixel.
 	if (done)
 	{
 		return;
@@ -480,9 +465,9 @@ clusterRenderCUDA(
 	n_contributions[pixel_index] = contributor;
 
 	// Initialize rendering variables.
-	__half pixel_transmittance = CUDART_ONE_FP16;
+	float pixel_transmittance = 1.0f;
 	float expected_invdepth = 0.0f;
-	__half pixel_color[CHANNELS] = {};
+	float pixel_color[CHANNELS] = {};
 
     // For each cluster, convert transmittance accumulator to alpha, normalize RGB, and perform alpha over.
     float lowest_depth = 0.0f;
@@ -495,55 +480,51 @@ clusterRenderCUDA(
 		{
 			if (pixel_cluster_depths[candidate_index] < current_lowest_depth &&
                 pixel_cluster_depths[candidate_index] > lowest_depth)
-			{
-				current_lowest_depth = pixel_cluster_depths[candidate_index];
+            {
+                current_lowest_depth = pixel_cluster_depths[candidate_index];
 				collection_index = candidate_index;
 			}
 		}
 
 		// Update the lowest depth for next pass.
-		lowest_depth = current_lowest_depth;
+        lowest_depth = current_lowest_depth;
 
         // Convert cluster transmittance to alpha.
-        const __half cluster_alpha = __hsub(CUDART_ONE_FP16, pixel_cluster_alphas[collection_index]);
+        const float cluster_alpha = 1.0f - pixel_cluster_alphas[collection_index];
 
         // Compute the reciprocal of alpha sums and premultiplied alpha to avoid repeated divisions.
-		const __half alpha_sum_reciprocal = __hmul(hrcp(pixel_cluster_alpha_sums[collection_index]), cluster_alpha);
+        const float alpha_sum_reciprocal = 1.0f / pixel_cluster_alpha_sums[collection_index] * cluster_alpha;
 
-		// Get cluster data (and premultiply alphas).
-		const __half cluster_red = __hmul(alpha_sum_reciprocal, pixel_cluster_reds[collection_index]);
-		const __half cluster_green = __hmul(alpha_sum_reciprocal, pixel_cluster_greens[collection_index]);
-		const __half cluster_blue = __hmul(alpha_sum_reciprocal, pixel_cluster_blues[collection_index]);
+        // Get cluster data (and premultiply alphas).
+        const float cluster_red = alpha_sum_reciprocal * pixel_cluster_reds[collection_index];
+        const float cluster_green = alpha_sum_reciprocal * pixel_cluster_greens[collection_index];
+        const float cluster_blue = alpha_sum_reciprocal * pixel_cluster_blues[collection_index];
 
-		// Contribute colors to pixel.
-		pixel_color[0] = __hfma(cluster_red, pixel_transmittance, pixel_color[0]);
-		pixel_color[1] = __hfma(cluster_green, pixel_transmittance, pixel_color[1]);
-		pixel_color[2] = __hfma(cluster_blue, pixel_transmittance, pixel_color[2]);
+        // Contribute colors to pixel.
+        pixel_color[0] = fmaf(cluster_red, pixel_transmittance, pixel_color[0]);
+        pixel_color[1] = fmaf(cluster_green, pixel_transmittance, pixel_color[1]);
+        pixel_color[2] = fmaf(cluster_blue, pixel_transmittance, pixel_color[2]);
 
         // Update invdepth.
         if (invdepth)
             expected_invdepth = fmaf(
-                (1.0f / pixel_cluster_depths[collection_index]) * __half2float(cluster_alpha),
-                __half2float(pixel_transmittance),
+                1.0f / pixel_cluster_depths[collection_index] * cluster_alpha,
+                pixel_transmittance,
                 expected_invdepth
             );
 
         // Update transmittance.
-		pixel_transmittance = __hmul(
-            pixel_transmittance,
-            __hsub(CUDART_ONE_FP16, __hmin(CUDART_ONE_FP16, cluster_alpha))
-        );
+        pixel_transmittance = pixel_transmittance * (1.0f - fminf(1.0f, cluster_alpha));
 	}
 	
 	// Write to output color, adding background.
-    final_transmittance[pixel_index] = __half2float(pixel_transmittance);
+    final_transmittance[pixel_index] = pixel_transmittance;
     if (invdepth)
         invdepth[pixel_index] = expected_invdepth;
 
     for (int channel = 0; channel < CHANNELS; ++channel)
 	{
-		out_color[channel * height * width + pixel_index] = __half2float(pixel_color[channel]) + __half2float(
-			pixel_transmittance) * bg_color[channel];
+		out_color[channel * height * width + pixel_index] = pixel_color[channel] + pixel_transmittance * bg_color[channel];
 	}
 }
 
