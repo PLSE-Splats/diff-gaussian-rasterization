@@ -295,6 +295,11 @@ int CudaRasterizer::Rasterizer::forward(
   CHECK_CUDA(, debug)
 
   // 1. Seed cluster depths.
+  CHECK_CUDA(FORWARD::seed_cluster_depths(
+                 tile_grid, block, width, height, groupState.splat_ids,
+                 imgState.ranges, geomState.means2D, geomState.conic_opacity,
+                 geomState.depths, clusterState.depths),
+             debug);
 
   // 2. Cluster splats.
   const float* features =

@@ -33,6 +33,20 @@ void preprocess(int P, int D, int M, const float* orig_points,
                 float4* conic_opacity, const dim3 grid, uint32_t* tiles_touched,
                 bool prefiltered, bool antialiasing);
 
+/**
+ * Seed cluster depths per pixel.
+ *
+ * @param grid_size Number of blocks to launch (number of tiles in the image).
+ * @param block_size Number of threads per block (size of a tile).
+ * @param width Image width.
+ * @param height Image height.
+ * @param splat_ids List of splat indices per tile.
+ * @param splat_id_ranges Index ranges in splat list for each tile.
+ * @param means_2d Input 2D means of each splat.
+ * @param conic_opacities Input conic opacity of each splat.
+ * @param depths Input depth of each splat.
+ * @param cluster_depths Output cluster depths per pixel.
+ */
 void seed_cluster_depths(dim3 grid_size, dim3 block_size, int width, int height,
                          const uint32_t* splat_ids,
                          const uint2* splat_id_ranges, const float2* means_2d,
