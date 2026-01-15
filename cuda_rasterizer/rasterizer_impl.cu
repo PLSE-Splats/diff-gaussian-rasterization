@@ -141,16 +141,15 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(
   return geom;
 }
 CudaRasterizer::ClusterState CudaRasterizer::ClusterState::fromChunk(
-    char*& chunk, const size_t num_pixels, const unsigned short num_clusters) {
+    char*& chunk, const size_t N) {
   ClusterState clusters;
-  const size_t clusters_size = num_pixels * num_clusters;
-  obtain(chunk, clusters.depths, clusters_size, 128);
-  obtain(chunk, clusters.splat_counts, clusters_size, 128);
-  obtain(chunk, clusters.alpha_sums, clusters_size, 128);
-  obtain(chunk, clusters.alphas, clusters_size, 128);
-  obtain(chunk, clusters.reds, clusters_size, 128);
-  obtain(chunk, clusters.greens, clusters_size, 128);
-  obtain(chunk, clusters.blues, clusters_size, 128);
+  obtain(chunk, clusters.depths, N, 128);
+  obtain(chunk, clusters.splat_counts, N, 128);
+  obtain(chunk, clusters.alpha_sums, N, 128);
+  obtain(chunk, clusters.alphas, N, 128);
+  obtain(chunk, clusters.reds, N, 128);
+  obtain(chunk, clusters.greens, N, 128);
+  obtain(chunk, clusters.blues, N, 128);
   return clusters;
 }
 
@@ -196,6 +195,7 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(
 // of Gaussians.
 int CudaRasterizer::Rasterizer::forward(
     const std::function<char*(size_t)>& geometryBuffer,
+    const std::function<char*(size_t)>& clusterBuffer,
     const std::function<char*(size_t)>& groupingBuffer,
     const std::function<char*(size_t)>& imageBuffer, const int P, const int D,
     const int M, const float* background, const int width, const int height,
@@ -211,6 +211,13 @@ int CudaRasterizer::Rasterizer::forward(
   const size_t chunk_size = required<GeometryState>(P);
   char* chunkptr = geometryBuffer(chunk_size);
   GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
+
+  // Allocate space for clustering results.
+  const size_t clusters_chunk_size =
+      required<ClusterState>(width * height * NUMBER_OF_CLUSTERS);
+  char* cluster_chunkptr = clusterBuffer(clusters_chunk_size);
+  ClusterState clusterState = ClusterState::fromChunk(
+      cluster_chunkptr, width * height * NUMBER_OF_CLUSTERS);
 
   if (radii == nullptr) {
     radii = geomState.internal_radii;

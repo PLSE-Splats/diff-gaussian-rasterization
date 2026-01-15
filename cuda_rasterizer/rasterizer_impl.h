@@ -91,12 +91,10 @@ struct ClusterState {
    * Allocate ClusterState structure from memory chunk.
    *
    * @param chunk Memory chunk location.
-   * @param num_pixels Number of pixels in the image (size of each layer).
-   * @param num_clusters Number of clusters per pixel.
+   * @param N Number of elements to allocate (pixels * clusters per pixel).
    * @return Allocated ClusterState structure.
    */
-  static ClusterState fromChunk(char*& chunk, size_t num_pixels,
-                                unsigned short num_clusters);
+  static ClusterState fromChunk(char*& chunk, size_t N);
 };
 
 struct ImageState {
