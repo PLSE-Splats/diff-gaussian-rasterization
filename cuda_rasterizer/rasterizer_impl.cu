@@ -293,10 +293,16 @@ int CudaRasterizer::Rasterizer::forward(
                          BLOCK_SIZE>>>(num_rendered, groupState.tile_ids,
                                        imgState.ranges);
   CHECK_CUDA(, debug)
-
-  // Cluster and Render.
+  
+  // 1. Seed cluster depths.
+  
+  // 2. Cluster splats.
   const float* features =
       colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+  
+  // 3. Composite clusters to produce final image.
+
+  // Cluster and Render.
   CHECK_CUDA(FORWARD::cluster_render(
                  tile_grid, block, width, height, groupState.splat_ids,
                  imgState.ranges, geomState.means2D, geomState.conic_opacity,
