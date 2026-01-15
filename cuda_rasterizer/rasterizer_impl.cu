@@ -140,6 +140,19 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(
   obtain(chunk, geom.point_offsets, P, 128);
   return geom;
 }
+CudaRasterizer::ClusterState CudaRasterizer::ClusterState::fromChunk(
+    char*& chunk, const size_t num_pixels, const unsigned short num_clusters) {
+  ClusterState clusters;
+  const size_t clusters_size = num_pixels * num_clusters;
+  obtain(chunk, clusters.depths, clusters_size, 128);
+  obtain(chunk, clusters.splat_counts, clusters_size, 128);
+  obtain(chunk, clusters.alpha_sums, clusters_size, 128);
+  obtain(chunk, clusters.alphas, clusters_size, 128);
+  obtain(chunk, clusters.reds, clusters_size, 128);
+  obtain(chunk, clusters.greens, clusters_size, 128);
+  obtain(chunk, clusters.blues, clusters_size, 128);
+  return clusters;
+}
 
 CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk,
                                                                  size_t N) {
@@ -182,20 +195,20 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
 int CudaRasterizer::Rasterizer::forward(
-    std::function<char*(size_t)> geometryBuffer,
-    std::function<char*(size_t)> groupingBuffer,
-    std::function<char*(size_t)> imageBuffer, const int P, int D, int M,
-    const float* background, const int width, int height, const float* means3D,
-    const float* shs, const float* colors_precomp, const float* opacities,
-    const float* scales, const float scale_modifier, const float* rotations,
-    const float* cov3D_precomp, const float* viewmatrix,
+    const std::function<char*(size_t)>& geometryBuffer,
+    const std::function<char*(size_t)>& groupingBuffer,
+    const std::function<char*(size_t)>& imageBuffer, const int P, const int D,
+    const int M, const float* background, const int width, const int height,
+    const float* means3D, const float* shs, const float* colors_precomp,
+    const float* opacities, const float* scales, const float scale_modifier,
+    const float* rotations, const float* cov3D_precomp, const float* viewmatrix,
     const float* projmatrix, const float* cam_pos, const float tan_fovx,
-    float tan_fovy, const bool prefiltered, float* out_color, float* depth,
-    bool antialiasing, int* radii, bool debug) {
+    const float tan_fovy, const bool prefiltered, float* out_color,
+    float* depth, const bool antialiasing, int* radii, const bool debug) {
   const float focal_y = height / (2.0f * tan_fovy);
   const float focal_x = width / (2.0f * tan_fovx);
 
-  size_t chunk_size = required<GeometryState>(P);
+  const size_t chunk_size = required<GeometryState>(P);
   char* chunkptr = geometryBuffer(chunk_size);
   GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
 
@@ -203,12 +216,12 @@ int CudaRasterizer::Rasterizer::forward(
     radii = geomState.internal_radii;
   }
 
-  dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X,
-                 (height + BLOCK_Y - 1) / BLOCK_Y, 1);
-  dim3 block(BLOCK_X, BLOCK_Y, 1);
+  const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X,
+                       (height + BLOCK_Y - 1) / BLOCK_Y, 1);
+  const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
   // Dynamically resize image-based auxiliary buffers during training
-  size_t img_chunk_size = required<ImageState>(width * height);
+  const size_t img_chunk_size = required<ImageState>(width * height);
   char* img_chunkptr = imageBuffer(img_chunk_size);
   ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 

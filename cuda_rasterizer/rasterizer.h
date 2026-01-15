@@ -29,9 +29,9 @@ namespace CudaRasterizer
 			bool* present);
 
 		static int forward(
-			std::function<char* (size_t)> geometryBuffer,
-			std::function<char* (size_t)> groupingBuffer,
-			std::function<char* (size_t)> imageBuffer,
+                    const std::function<char* (size_t)>& geometryBuffer,
+                    const std::function<char* (size_t)>& groupingBuffer,
+                    const std::function<char* (size_t)>& imageBuffer,
 			const int P, int D, int M,
 			const float* background,
 			const int width, int height,
