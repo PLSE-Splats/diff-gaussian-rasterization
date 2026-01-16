@@ -246,9 +246,82 @@ __global__ void preprocessCUDA(
 
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
+    seedClusterDepthsCUDA(const int width, const int height,
+                          const uint32_t* splat_ids,
+                          const uint2* splat_id_ranges, const float2* means_2d,
+                          const float4* conic_opacities, const float* depths,
+                          __half* cluster_depths) {
+  // Gather thread information.
+  const auto block = cg::this_thread_block();
+  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
+  const auto group_index = block.group_index();
+  const auto thread_index = block.thread_index();
+  const auto thread_rank = block.thread_rank();
+
+  // Gather pixel information.
+  const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X,
+                                          group_index.y * BLOCK_Y};
+  const uint2 pixel_coordinate = {minimum_pixel_coordinate.x + thread_index.x,
+                                  minimum_pixel_coordinate.y + thread_index.y};
+  const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+  // Compute if this thread is associated with a visible pixel.
+  const bool pixel_in_bounds =
+      pixel_coordinate.x < width && pixel_coordinate.y < height;
+  bool done = !pixel_in_bounds;
+
+  // Load input range for this tile.
+  const auto splat_id_range =
+      splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
+  int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
+  const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+  // Allocate storage for batches of collectively fetched data.
+  __shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
+  __shared__ __half collected_splat_depths[BLOCK_SIZE];
+  __shared__ float2 collected_means_2d[BLOCK_SIZE];
+  __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+
+  // Local cluster data.
+  __half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
+
+  // Which cluster needs to be seeded. Thread stops when all clusters are
+  // seeded.
+  unsigned short unseeded_cluster_index = 0;
+
+  // Iterate over batches until all done or range is complete.
+  for (int batch_index = 0;
+       batch_index < rounds && unseeded_cluster_index < NUMBER_OF_CLUSTERS;
+       ++batch_index, todo -= BLOCK_SIZE) {
+    // Collectively fetch per-splat data from global to shared.
+    const unsigned int progress = batch_index * BLOCK_SIZE + thread_rank;
+    if (splat_id_range.x + progress < splat_id_range.y) {
+      const uint32_t collected_splat_id =
+          splat_ids[splat_id_range.x + progress];
+      collected_splat_ids[thread_rank] = collected_splat_id;
+      collected_splat_depths[thread_rank] =
+          __float2half(depths[collected_splat_id]);
+      collected_means_2d[thread_rank] = means_2d[collected_splat_id];
+      collected_conic_opacity[thread_rank] =
+          conic_opacities[collected_splat_id];
+    }
+    block.sync();
+
+    // Iterate over current batch (per thread).
+    // Does nothing if the thread is not mapped to a valid pixel (done).
+    for (int sample_index = 0;
+         !done && unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
+         sample_index < min(BLOCK_SIZE, todo);
+         ++sample_index) {
+    }
+  }
+}
+
+template <uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_SIZE)
     clusterRenderCUDA(const int width, const int height,
                       const uint32_t* splat_ids, const uint2* splat_id_ranges,
-                      const float2* means_2d, const float4* conic_opacity,
+                      const float2* means_2d, const float4* conic_opacities,
                       const float* depths, const float* features,
                       uint32_t* n_contributions, const float* bg_color,
                       float* final_transmittance, float* invdepth,
@@ -315,7 +388,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       collected_splat_depths[thread_rank] =
           __float2half(depths[collected_splat_id]);
       collected_means_2d[thread_rank] = means_2d[collected_splat_id];
-      collected_conic_opacity[thread_rank] = conic_opacity[collected_splat_id];
+      collected_conic_opacity[thread_rank] =
+          conic_opacities[collected_splat_id];
     }
     block.sync();
 
@@ -537,6 +611,9 @@ void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size, int width,
                                   const float2* means_2d,
                                   const float4* conic_opacities,
                                   const float* depths, __half* cluster_depths) {
+  seedClusterDepthsCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
+      width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
+      depths, cluster_depths);
 }
 
 void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width,
