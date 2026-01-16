@@ -268,7 +268,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
       pixel_coordinate.x < width && pixel_coordinate.y < height;
-  bool done = !pixel_in_bounds;
 
   // Load input range for this tile.
   const auto splat_id_range =
@@ -310,7 +309,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     // Iterate over current batch (per thread).
     // Does nothing if the thread is not mapped to a valid pixel (done).
     for (int sample_index = 0;
-         !done && unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
+         pixel_in_bounds && unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
          sample_index < min(BLOCK_SIZE, todo);
          ++sample_index) {
       // Collect sample ID.
@@ -352,7 +351,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Seeding is complete, write out to global memory in depth order.
 
   // Exit if this thread is not mapped to a valid pixel.
-  if (done) {
+  if (!pixel_in_bounds) {
     return;
   }
 
@@ -386,7 +385,122 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                 const float* features, uint32_t* n_contributions,
                 float* invdepth, __half* cluster_depths, __half* cluster_alphas,
                 __half* cluster_reds, __half* cluster_greens,
-                __half* cluster_blues) {}
+                __half* cluster_blues) {
+  // Gather thread information.
+  const auto block = cg::this_thread_block();
+  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
+  const auto group_index = block.group_index();
+  const auto thread_index = block.thread_index();
+  const auto thread_rank = block.thread_rank();
+
+  // Gather pixel information.
+  const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X,
+                                          group_index.y * BLOCK_Y};
+  const uint2 pixel_coordinate = {minimum_pixel_coordinate.x + thread_index.x,
+                                  minimum_pixel_coordinate.y + thread_index.y};
+  const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+
+  // Compute if this thread is associated with a visible pixel.
+  const bool pixel_in_bounds =
+      pixel_coordinate.x < width && pixel_coordinate.y < height;
+  bool done = !pixel_in_bounds;
+
+  // Load input range for this tile.
+  const auto splat_id_range =
+      splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
+  int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
+  const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+  // Allocate storage for batches of collectively fetched data.
+  __shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
+  __shared__ __half collected_splat_depths[BLOCK_SIZE];
+  __shared__ float2 collected_means_2d[BLOCK_SIZE];
+  __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+
+  // Clustering helper variables.
+  uint32_t contributor = 0;
+
+  // Local cluster data.
+  __half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
+  __half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
+  __half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
+  __half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
+  __half pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
+  __half pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
+  __half pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
+
+  // Pull depth seeds.
+  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
+       ++cluster_index) {
+    pixel_cluster_depths[cluster_index] = cluster_depths[cluster_index];
+  }
+
+  // Initialize pixel_cluster_alphas to 1.0 (transmittance accumulator starts at
+  // 1).
+  for (auto& pixel_cluster_alpha : pixel_cluster_alphas) {
+    pixel_cluster_alpha = CUDART_ONE_FP16;
+  }
+
+  // Iterate over batches until all done or range is complete.
+  for (int batch_index = 0; batch_index < rounds;
+       ++batch_index, todo -= BLOCK_SIZE) {
+    // Collectively fetch per-splat data from global to shared.
+    const unsigned int progress = batch_index * BLOCK_SIZE + thread_rank;
+    if (splat_id_range.x + progress < splat_id_range.y) {
+      const uint32_t collected_splat_id =
+          splat_ids[splat_id_range.x + progress];
+      collected_splat_ids[thread_rank] = collected_splat_id;
+      collected_splat_depths[thread_rank] =
+          __float2half(depths[collected_splat_id]);
+      collected_means_2d[thread_rank] = means_2d[collected_splat_id];
+      collected_conic_opacity[thread_rank] =
+          conic_opacities[collected_splat_id];
+    }
+    block.sync();
+
+    // Iterate over current batch (per thread).
+    // Does nothing if the thread is not mapped to a valid pixel (done).
+    for (int sample_index = 0; !done && sample_index < min(BLOCK_SIZE, todo);
+         ++sample_index) {
+      // Collect sample ID.
+      const uint32_t sample_splat_id = collected_splat_ids[sample_index];
+
+      // Keep track of current position in range.
+      contributor++;
+
+      // Compute splat alpha (determines if it's in this pixel).
+
+      // Resample using conic matrix (cf. "Surface
+      // Splatting" by Zwicker et al., 2001)
+      const float2 xy = collected_means_2d[sample_index];
+      const float2 d = {xy.x - static_cast<float>(pixel_coordinate.x),
+                        xy.y - static_cast<float>(pixel_coordinate.y)};
+      const float4 con_o = collected_conic_opacity[sample_index];
+      const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
+                          con_o.y * d.x * d.y;
+      if (power > 0.0f) continue;
+
+      // Eq. (2) from 3D Gaussian splatting paper.
+      // Obtain alpha by multiplying with Gaussian opacity
+      // and its exponential falloff from mean.
+      // Avoid numerical instabilities (see paper appendix).
+      const float sample_alpha_float = min(0.99f, con_o.w * exp(power));
+      if (sample_alpha_float < MINIMUM_SPLAT_ALPHA) continue;
+      const __half sample_alpha = __float2half(sample_alpha_float);
+
+      // Collect color.
+      const __half sample_r =
+          __float2half(features[sample_splat_id * CHANNELS + 0]);
+      const __half sample_g =
+          __float2half(features[sample_splat_id * CHANNELS + 1]);
+      const __half sample_b =
+          __float2half(features[sample_splat_id * CHANNELS + 2]);
+
+      // Collect sample depth.
+      const __half sample_depth = collected_splat_depths[sample_index];
+    }
+  }
+}
 
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
