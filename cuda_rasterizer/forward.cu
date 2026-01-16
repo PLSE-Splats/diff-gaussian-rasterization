@@ -313,7 +313,68 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
          !done && unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
          sample_index < min(BLOCK_SIZE, todo);
          ++sample_index) {
+      // Collect sample ID.
+      const uint32_t sample_splat_id = collected_splat_ids[sample_index];
+
+      // Compute splat alpha (determines if it's in this pixel).
+
+      // Resample using conic matrix (cf. "Surface
+      // Splatting" by Zwicker et al., 2001)
+      const float2 xy = collected_means_2d[sample_index];
+      const float2 d = {xy.x - static_cast<float>(pixel_coordinate.x),
+                        xy.y - static_cast<float>(pixel_coordinate.y)};
+      const float4 con_o = collected_conic_opacity[sample_index];
+      const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
+                          con_o.y * d.x * d.y;
+      if (power > 0.0f) continue;
+
+      // Eq. (2) from 3D Gaussian splatting paper.
+      // Obtain alpha by multiplying with Gaussian opacity
+      // and its exponential falloff from mean.
+      // Avoid numerical instabilities (see paper appendix).
+      const float sample_alpha_float = min(0.99f, con_o.w * exp(power));
+      if (sample_alpha_float < MINIMUM_SPLAT_ALPHA) continue;
+      const __half sample_alpha = __float2half(sample_alpha_float);
+
+      // Collect sample depth.
+      const __half sample_depth = collected_splat_depths[sample_index];
+
+      // Seed the next unseeded cluster with this splat's depth.
+      pixel_cluster_depths[unseeded_cluster_index] = sample_depth;
+
+      // FIXME: Consider checking if sample_depth was already used (unlikely).
+
+      // Move to next unseeded cluster for next time.
+      unseeded_cluster_index++;
     }
+  }
+
+  // Seeding is complete, write out to global memory in depth order.
+
+  // Exit if this thread is not mapped to a valid pixel.
+  if (done) {
+    return;
+  }
+
+  // Write out cluster depths in sorted order.
+  __half last_value = CUDART_ZERO_FP16;
+  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
+       ++cluster_index) {
+    // Find candidate such that last_value < candidate < current_lowest.
+    __half current_lowest = CUDART_MAX_NORMAL_FP16;
+    __half candidate;
+    for (int candidate_index = 0; candidate_index < NUMBER_OF_CLUSTERS;
+         ++candidate_index) {
+      candidate = pixel_cluster_depths[candidate_index];
+      if (last_value < candidate && candidate < current_lowest) {
+        current_lowest = candidate;
+      }
+    }
+    last_value = current_lowest;
+
+    // Write out the found candidate.
+    cluster_depths[pixel_index * NUMBER_OF_CLUSTERS + cluster_index] =
+        current_lowest;
   }
 }
 

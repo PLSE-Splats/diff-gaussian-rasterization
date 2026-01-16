@@ -40,7 +40,8 @@ __device__ const float SH_C3[] = {
 // Clustering parameters.
 #define NUMBER_OF_CLUSTERS 12
 #define MINIMUM_TRANSMITTANCE 0.0001f
-#define DEBUG_PIXEL -1 //682741
+#define MINIMUM_SPLAT_ALPHA 0.003921f
+#define DEBUG_PIXEL -1 // 682741
 
 // Half constants.
 #define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
