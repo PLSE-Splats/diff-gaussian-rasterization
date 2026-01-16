@@ -144,8 +144,6 @@ CudaRasterizer::ClusterState CudaRasterizer::ClusterState::fromChunk(
     char*& chunk, const size_t N) {
   ClusterState clusters;
   obtain(chunk, clusters.depths, N, 128);
-  obtain(chunk, clusters.splat_counts, N, 128);
-  obtain(chunk, clusters.alpha_sums, N, 128);
   obtain(chunk, clusters.alphas, N, 128);
   obtain(chunk, clusters.reds, N, 128);
   obtain(chunk, clusters.greens, N, 128);
@@ -304,16 +302,22 @@ int CudaRasterizer::Rasterizer::forward(
   // 2. Cluster splats.
   const float* features =
       colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+  CHECK_CUDA(FORWARD::cluster(
+                 tile_grid, block, width, height, groupState.splat_ids,
+                 imgState.ranges, geomState.means2D, geomState.conic_opacity,
+                 geomState.depths, features, imgState.n_contrib, depth,
+                 clusterState.depths, clusterState.alphas, clusterState.reds,
+                 clusterState.greens, clusterState.blues),
+             debug);
 
   // 3. Composite clusters to produce final image.
 
-  // Cluster and Render.
-  CHECK_CUDA(FORWARD::cluster_render(
-                 tile_grid, block, width, height, groupState.splat_ids,
-                 imgState.ranges, geomState.means2D, geomState.conic_opacity,
-                 geomState.depths, features, imgState.n_contrib, background,
-                 imgState.accum_alpha, depth, out_color),
-             debug);
+  CHECK_CUDA(
+      FORWARD::render(tile_grid, block, width, height, clusterState.depths,
+                      clusterState.alphas, clusterState.reds,
+                      clusterState.greens, clusterState.blues, background,
+                      imgState.accum_alpha, out_color),
+      debug);
 
   return num_rendered;
 }

@@ -58,16 +58,6 @@ struct ClusterState {
   __half* depths;
 
   /**
-   * Number of splats per cluster.
-   */
-  unsigned short* splat_counts;
-
-  /**
-   * Sum of alpha values during clustering.
-   */
-  __half* alpha_sums;
-
-  /**
    * Final alpha of the cluster.
    */
   __half* alphas;
