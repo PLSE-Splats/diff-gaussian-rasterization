@@ -311,7 +311,6 @@ int CudaRasterizer::Rasterizer::forward(
              debug);
 
   // 3. Composite clusters to produce final image.
-
   CHECK_CUDA(
       FORWARD::render(tile_grid, block, width, height, clusterState.depths,
                       clusterState.alphas, clusterState.reds,

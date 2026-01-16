@@ -380,6 +380,23 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
+    clusterCUDA(const int width, const int height, const uint32_t* splat_ids,
+                const uint2* splat_id_ranges, const float2* means_2d,
+                const float4* conic_opacities, const float* depths,
+                const float* features, uint32_t* n_contributions,
+                float* invdepth, __half* cluster_depths, __half* cluster_alphas,
+                __half* cluster_reds, __half* cluster_greens,
+                __half* cluster_blues) {}
+
+template <uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+    renderCUDA(const int width, const int height, const __half* depths,
+               const __half* alphas, const __half* reds, const __half* greens,
+               const __half* blues, const float* bg_color,
+               float* final_transmittance, float* out_color) {}
+
+template <uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_SIZE)
     clusterRenderCUDA(const int width, const int height,
                       const uint32_t* splat_ids, const uint2* splat_id_ranges,
                       const float2* means_2d, const float4* conic_opacities,
@@ -666,8 +683,9 @@ void FORWARD::preprocess(int P, int D, int M, const float* means3D,
       antialiasing);
 }
 
-void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size, int width,
-                                  int height, const uint32_t* splat_ids,
+void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size,
+                                  const int width, const int height,
+                                  const uint32_t* splat_ids,
                                   const uint2* splat_id_ranges,
                                   const float2* means_2d,
                                   const float4* conic_opacities,
@@ -675,6 +693,29 @@ void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size, int width,
   seedClusterDepthsCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
       depths, cluster_depths);
+}
+void FORWARD::cluster(dim3 grid_size, dim3 block_size, const int width,
+                      const int height, const uint32_t* splat_ids,
+                      const uint2* splat_id_ranges, const float2* means_2d,
+                      const float4* conic_opacities, const float* depths,
+                      const float* features, uint32_t* n_contributions,
+                      float* invdepth, __half* cluster_depths,
+                      __half* cluster_alphas, __half* cluster_reds,
+                      __half* cluster_greens, __half* cluster_blues) {
+  clusterCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
+      width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
+      depths, features, n_contributions, invdepth, cluster_depths,
+      cluster_alphas, cluster_reds, cluster_greens, cluster_blues);
+}
+void FORWARD::render(dim3 grid_size, dim3 block_size, const int width,
+                     const int height, const __half* depths,
+                     const __half* alphas, const __half* reds,
+                     const __half* greens, const __half* blues,
+                     const float* bg_color, float* final_transmittance,
+                     float* out_color) {
+  renderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
+      width, height, depths, alphas, reds, greens, blues, bg_color,
+      final_transmittance, out_color);
 }
 
 void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width,
