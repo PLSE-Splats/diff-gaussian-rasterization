@@ -498,7 +498,52 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 
       // Collect sample depth.
       const __half sample_depth = collected_splat_depths[sample_index];
+
+      // Pick a target cluster.
+      unsigned short target_cluster_index = 0;
+      __half current_closest_depth_distance = CUDART_MAX_NORMAL_FP16;
+
+      // Find the closest in depth.
+      // | cluster depth - sample depth | < current_closest_depth_distance
+      for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
+           ++cluster_index) {
+        const __half distance_to_cluster =
+            __habs(pixel_cluster_depths[cluster_index] - sample_depth);
+        if (distance_to_cluster < current_closest_depth_distance) {
+          current_closest_depth_distance = distance_to_cluster;
+          target_cluster_index = cluster_index;
+        }
+      }
+
+      // Add splat to target cluster.
+      pixel_cluster_splat_counts[target_cluster_index] += CUDART_ONE_FP16;
+      pixel_cluster_alpha_sums[target_cluster_index] += sample_alpha;
+      pixel_cluster_alphas[target_cluster_index] *=
+          CUDART_ONE_FP16 - sample_alpha;
+      pixel_cluster_reds[target_cluster_index] = __hfma(
+          sample_alpha, sample_r, pixel_cluster_reds[target_cluster_index]);
+      pixel_cluster_greens[target_cluster_index] = __hfma(
+          sample_alpha, sample_g, pixel_cluster_greens[target_cluster_index]);
+      pixel_cluster_blues[target_cluster_index] = __hfma(
+          sample_alpha, sample_b, pixel_cluster_blues[target_cluster_index]);
+
+      // Update cluster depth.
+      const __half current_depth = pixel_cluster_depths[target_cluster_index];
+      const __half count_h = pixel_cluster_splat_counts[target_cluster_index];
+      const __half depth_diff = sample_depth - current_depth;
+      const __half depth_delta = depth_diff / count_h;
+      pixel_cluster_depths[target_cluster_index] = current_depth + depth_delta;
     }
+    
+    // Sync before next ingest batch.
+    block.sync();
+  }
+  
+  // Clustering is complete.
+  
+  // Exit if this thread is not mapped toa  valid pixel.
+  if (!pixel_in_bounds) {
+    return;
   }
 }
 
