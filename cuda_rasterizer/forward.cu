@@ -381,7 +381,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                 const uint2* splat_id_ranges, const float2* means_2d,
                 const float4* conic_opacities, const float* depths,
                 const float* features, uint32_t* n_contributions,
-                float* invdepth, __half* cluster_depths, __half* cluster_alphas,
+                __half* cluster_depths, __half* cluster_alphas,
                 __half* cluster_reds, __half* cluster_greens,
                 __half* cluster_blues) {
   // Gather thread information.
@@ -573,7 +573,7 @@ template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
     renderCUDA(const int width, const int height, const __half* depths,
                const __half* alphas, const __half* reds, const __half* greens,
-               const __half* blues, const float* bg_color,
+               const __half* blues, const float* bg_color, float* inv_depth,
                float* final_transmittance, float* out_color) {
   // Gather thread information.
   const auto block = cg::this_thread_block();
@@ -601,7 +601,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 
   // Initialize rendering variables.
   __half pixel_transmittance = CUDART_ONE_FP16;
-  float expected_invdepth = 0.0f;
+  __half expected_invdepth = CUDART_ZERO_FP16;
   __half pixel_color[CHANNELS] = {};
 
   // Iterate over cluster from front to back.
@@ -618,10 +618,25 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     pixel_color[2] =
         __hfma(blues[location], pixel_transmittance, pixel_color[2]);
 
+    // Update inverse depth.
+    if (inv_depth) {
+      expected_invdepth =
+          __hfma(hrcp(depths[cluster_index]) * alphas[cluster_index],
+                 pixel_transmittance, expected_invdepth);
+    }
+
     // Update transmittance.
     pixel_transmittance *=
         CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, alphas[location]);
   }
+
+  // Write out final inverse depth.
+  if (inv_depth) {
+    inv_depth[pixel_index] = __half2float(expected_invdepth);
+  }
+
+  // Write out final transmittance.
+  final_transmittance[pixel_index] = __half2float(pixel_transmittance);
 
   // Write to color output (and apply background color).
   for (int channel = 0; channel < CHANNELS; ++channel) {
@@ -935,22 +950,22 @@ void FORWARD::cluster(dim3 grid_size, dim3 block_size, const int width,
                       const uint2* splat_id_ranges, const float2* means_2d,
                       const float4* conic_opacities, const float* depths,
                       const float* features, uint32_t* n_contributions,
-                      float* invdepth, __half* cluster_depths,
-                      __half* cluster_alphas, __half* cluster_reds,
-                      __half* cluster_greens, __half* cluster_blues) {
+                      __half* cluster_depths, __half* cluster_alphas,
+                      __half* cluster_reds, __half* cluster_greens,
+                      __half* cluster_blues) {
   clusterCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
-      depths, features, n_contributions, invdepth, cluster_depths,
-      cluster_alphas, cluster_reds, cluster_greens, cluster_blues);
+      depths, features, n_contributions, cluster_depths, cluster_alphas,
+      cluster_reds, cluster_greens, cluster_blues);
 }
 void FORWARD::render(dim3 grid_size, dim3 block_size, const int width,
                      const int height, const __half* depths,
                      const __half* alphas, const __half* reds,
                      const __half* greens, const __half* blues,
-                     const float* bg_color, float* final_transmittance,
-                     float* out_color) {
+                     const float* bg_color, float* inv_depth,
+                     float* final_transmittance, float* out_color) {
   renderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
-      width, height, depths, alphas, reds, greens, blues, bg_color,
+      width, height, depths, alphas, reds, greens, blues, bg_color, inv_depth,
       final_transmittance, out_color);
 }
 

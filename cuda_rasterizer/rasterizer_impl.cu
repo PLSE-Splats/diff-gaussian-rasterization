@@ -305,7 +305,7 @@ int CudaRasterizer::Rasterizer::forward(
   CHECK_CUDA(FORWARD::cluster(
                  tile_grid, block, width, height, groupState.splat_ids,
                  imgState.ranges, geomState.means2D, geomState.conic_opacity,
-                 geomState.depths, features, imgState.n_contrib, depth,
+                 geomState.depths, features, imgState.n_contrib,
                  clusterState.depths, clusterState.alphas, clusterState.reds,
                  clusterState.greens, clusterState.blues),
              debug);
@@ -315,7 +315,7 @@ int CudaRasterizer::Rasterizer::forward(
       FORWARD::render(tile_grid, block, width, height, clusterState.depths,
                       clusterState.alphas, clusterState.reds,
                       clusterState.greens, clusterState.blues, background,
-                      imgState.accum_alpha, out_color),
+                      depth, imgState.accum_alpha, out_color),
       debug);
 
   return num_rendered;
