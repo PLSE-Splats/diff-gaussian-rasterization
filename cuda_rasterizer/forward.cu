@@ -264,6 +264,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   const uint2 pixel_coordinate = {minimum_pixel_coordinate.x + thread_index.x,
                                   minimum_pixel_coordinate.y + thread_index.y};
   const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+  const uint32_t number_of_pixels = width * height;
 
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
@@ -361,10 +362,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
        ++cluster_index) {
     // Find candidate such that last_value < candidate < current_lowest.
     __half current_lowest = CUDART_MAX_NORMAL_FP16;
-    __half candidate;
-    for (int candidate_index = 0; candidate_index < NUMBER_OF_CLUSTERS;
-         ++candidate_index) {
-      candidate = pixel_cluster_depths[candidate_index];
+    for (const auto candidate : pixel_cluster_depths) {
       if (last_value < candidate && candidate < current_lowest) {
         current_lowest = candidate;
       }
@@ -372,7 +370,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     last_value = current_lowest;
 
     // Write out the found candidate.
-    cluster_depths[pixel_index * NUMBER_OF_CLUSTERS + cluster_index] =
+    cluster_depths[cluster_index * number_of_pixels + pixel_index] =
         current_lowest;
   }
 }
@@ -399,6 +397,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   const uint2 pixel_coordinate = {minimum_pixel_coordinate.x + thread_index.x,
                                   minimum_pixel_coordinate.y + thread_index.y};
   const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+  const uint32_t number_of_pixels = width * height;
 
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
@@ -432,7 +431,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Pull depth seeds.
   for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
        ++cluster_index) {
-    pixel_cluster_depths[cluster_index] = cluster_depths[cluster_index];
+    pixel_cluster_depths[cluster_index] =
+        cluster_depths[cluster_index * number_of_pixels + pixel_index];
   }
 
   // Initialize pixel_cluster_alphas to 1.0 (transmittance accumulator starts at
@@ -534,16 +534,27 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       const __half depth_delta = depth_diff / count_h;
       pixel_cluster_depths[target_cluster_index] = current_depth + depth_delta;
     }
-    
+
     // Sync before next ingest batch.
     block.sync();
   }
-  
+
   // Clustering is complete.
-  
-  // Exit if this thread is not mapped toa  valid pixel.
+
+  // Exit if this thread is not mapped to a valid pixel.
   if (!pixel_in_bounds) {
     return;
+  }
+
+  // Write out cluster data.
+  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
+       ++cluster_index) {
+    const auto location = cluster_index * number_of_pixels + pixel_index;
+    cluster_depths[location] = pixel_cluster_depths[cluster_index];
+    cluster_alphas[location] = pixel_cluster_alphas[cluster_index];
+    cluster_reds[location] = pixel_cluster_reds[cluster_index];
+    cluster_greens[location] = pixel_cluster_greens[cluster_index];
+    cluster_blues[location] = pixel_cluster_blues[cluster_index];
   }
 }
 
