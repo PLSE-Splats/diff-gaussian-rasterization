@@ -402,7 +402,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
       pixel_coordinate.x < width && pixel_coordinate.y < height;
-  bool done = !pixel_in_bounds;
 
   // Load input range for this tile.
   const auto splat_id_range =
@@ -459,8 +458,9 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     block.sync();
 
     // Iterate over current batch (per thread).
-    // Does nothing if the thread is not mapped to a valid pixel (done).
-    for (int sample_index = 0; !done && sample_index < min(BLOCK_SIZE, todo);
+    // Does nothing if the thread is not mapped to a valid pixel.
+    for (int sample_index = 0;
+         pixel_in_bounds && sample_index < min(BLOCK_SIZE, todo);
          ++sample_index) {
       // Collect sample ID.
       const uint32_t sample_splat_id = collected_splat_ids[sample_index];
@@ -563,7 +563,62 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     renderCUDA(const int width, const int height, const __half* depths,
                const __half* alphas, const __half* reds, const __half* greens,
                const __half* blues, const float* bg_color,
-               float* final_transmittance, float* out_color) {}
+               float* final_transmittance, float* out_color) {
+  // Gather thread information.
+  const auto block = cg::this_thread_block();
+  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
+  const auto group_index = block.group_index();
+  const auto thread_index = block.thread_index();
+  const auto thread_rank = block.thread_rank();
+
+  // Gather pixel information.
+  const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X,
+                                          group_index.y * BLOCK_Y};
+  const uint2 pixel_coordinate = {minimum_pixel_coordinate.x + thread_index.x,
+                                  minimum_pixel_coordinate.y + thread_index.y};
+  const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+  const uint32_t number_of_pixels = width * height;
+
+  // Compute if this thread is associated with a visible pixel.
+  const bool pixel_in_bounds =
+      pixel_coordinate.x < width && pixel_coordinate.y < height;
+
+  // Exit if this thread is not mapped to a valid pixel.
+  if (!pixel_in_bounds) {
+    return;
+  }
+
+  // Initialize rendering variables.
+  __half pixel_transmittance = CUDART_ONE_FP16;
+  float expected_invdepth = 0.0f;
+  __half pixel_color[CHANNELS] = {};
+
+  // Iterate over cluster from front to back.
+  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
+       ++cluster_index) {
+    // Compute location in cluster data.
+    const auto location = cluster_index * number_of_pixels + pixel_index;
+
+    // Composite color.
+    pixel_color[0] =
+        __hfma(reds[location], pixel_transmittance, pixel_color[0]);
+    pixel_color[1] =
+        __hfma(greens[location], pixel_transmittance, pixel_color[1]);
+    pixel_color[2] =
+        __hfma(blues[location], pixel_transmittance, pixel_color[2]);
+
+    // Update transmittance.
+    pixel_transmittance *=
+        CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, alphas[location]);
+  }
+
+  // Write to color output (and apply background color).
+  for (int channel = 0; channel < CHANNELS; ++channel) {
+    out_color[channel * number_of_pixels + pixel_index] = __half2float(
+        __hfma(pixel_transmittance, __float2half(bg_color[channel]),
+               pixel_color[channel]));
+  }
+}
 
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
