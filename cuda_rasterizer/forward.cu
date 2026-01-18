@@ -555,17 +555,21 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     const auto location = cluster_index * number_of_pixels + pixel_index;
     const auto cluster_alpha =
         CUDART_ONE_FP16 - pixel_cluster_transmittance[cluster_index];
-    const auto alpha_sum_reciprocal =
-        hrcp(pixel_cluster_alpha_sums[cluster_index]) * cluster_alpha;
+    const auto alpha_sum = pixel_cluster_alpha_sums[cluster_index];
 
     cluster_depths[location] = pixel_cluster_depths[cluster_index];
     cluster_alphas[location] = cluster_alpha;
-    cluster_reds[location] =
-        alpha_sum_reciprocal * pixel_cluster_reds[cluster_index];
-    cluster_greens[location] =
-        alpha_sum_reciprocal * pixel_cluster_greens[cluster_index];
-    cluster_blues[location] =
-        alpha_sum_reciprocal * pixel_cluster_blues[cluster_index];
+
+    // Avoid NaN for empty clusters (alpha_sum == 0).
+    if (alpha_sum > CUDART_ZERO_FP16) {
+      const auto alpha_sum_reciprocal = hrcp(alpha_sum) * cluster_alpha;
+      cluster_reds[location] =
+          alpha_sum_reciprocal * pixel_cluster_reds[cluster_index];
+      cluster_greens[location] =
+          alpha_sum_reciprocal * pixel_cluster_greens[cluster_index];
+      cluster_blues[location] =
+          alpha_sum_reciprocal * pixel_cluster_blues[cluster_index];
+    }
   }
 }
 
@@ -577,10 +581,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                float* final_transmittance, float* out_color) {
   // Gather thread information.
   const auto block = cg::this_thread_block();
-  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
   const auto group_index = block.group_index();
   const auto thread_index = block.thread_index();
-  const auto thread_rank = block.thread_rank();
 
   // Gather pixel information.
   const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X,
@@ -620,9 +622,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 
     // Update inverse depth.
     if (inv_depth) {
-      expected_invdepth =
-          __hfma(hrcp(depths[cluster_index]) * alphas[cluster_index],
-                 pixel_transmittance, expected_invdepth);
+      expected_invdepth = __hfma(hrcp(depths[location]) * alphas[location],
+                                 pixel_transmittance, expected_invdepth);
     }
 
     // Update transmittance.
