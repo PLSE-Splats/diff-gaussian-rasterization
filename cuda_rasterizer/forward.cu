@@ -277,7 +277,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
   // Allocate storage for batches of collectively fetched data.
-  __shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
   __shared__ __half collected_splat_depths[BLOCK_SIZE];
   __shared__ float2 collected_means_2d[BLOCK_SIZE];
   __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
@@ -298,7 +297,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     if (splat_id_range.x + progress < splat_id_range.y) {
       const uint32_t collected_splat_id =
           splat_ids[splat_id_range.x + progress];
-      collected_splat_ids[thread_rank] = collected_splat_id;
       collected_splat_depths[thread_rank] =
           __float2half(depths[collected_splat_id]);
       collected_means_2d[thread_rank] = means_2d[collected_splat_id];
@@ -313,11 +311,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
          pixel_in_bounds && unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
          sample_index < min(BLOCK_SIZE, todo);
          ++sample_index) {
-      // Collect sample ID.
-      const uint32_t sample_splat_id = collected_splat_ids[sample_index];
-
-      // Compute splat alpha (determines if it's in this pixel).
-
       // Resample using conic matrix (cf. "Surface
       // Splatting" by Zwicker et al., 2001)
       const float2 xy = collected_means_2d[sample_index];
@@ -334,7 +327,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       // Avoid numerical instabilities (see paper appendix).
       const float sample_alpha_float = min(0.99f, con_o.w * exp(power));
       if (sample_alpha_float < MINIMUM_SPLAT_ALPHA) continue;
-      const __half sample_alpha = __float2half(sample_alpha_float);
 
       // Collect sample depth.
       const __half sample_depth = collected_splat_depths[sample_index];
