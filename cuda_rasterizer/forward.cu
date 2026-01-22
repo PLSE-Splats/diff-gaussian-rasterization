@@ -10,7 +10,7 @@
  */
 
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
+#include <curand_kernel.h>
 
 #include "auxiliary.h"
 #include "cuda_fp16.h"
@@ -269,6 +269,10 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
       pixel_coordinate.x < width && pixel_coordinate.y < height;
+  
+  // Setup randomizer.
+  curandStatePhilox4_32_10_t state;
+  curand_init(1234, thread_rank, 0, &state);
 
   // Load input range for this tile.
   const auto splat_id_range =
@@ -292,11 +296,11 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   for (int batch_index = 0;
        batch_index < rounds && unseeded_cluster_index < NUMBER_OF_CLUSTERS;
        ++batch_index, todo -= BLOCK_SIZE) {
-    // Collectively fetch per-splat data from global to shared.
+    // Collectively fetch a random splat's data from global to shared.
     const unsigned int progress = batch_index * BLOCK_SIZE + thread_rank;
     if (splat_id_range.x + progress < splat_id_range.y) {
       const uint32_t collected_splat_id =
-          splat_ids[splat_id_range.x + progress];
+          splat_ids[splat_id_range.x + curand(&state) % todo];
       collected_splat_depths[thread_rank] =
           __float2half(depths[collected_splat_id]);
       collected_means_2d[thread_rank] = means_2d[collected_splat_id];
