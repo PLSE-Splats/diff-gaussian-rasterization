@@ -58,26 +58,6 @@ struct ClusterState {
   __half* depths;
 
   /**
-   * Final alpha of the cluster.
-   */
-  __half* alphas;
-
-  /**
-   * Final red value of the cluster.
-   */
-  __half* reds;
-
-  /**
-   * Final green value of the cluster.
-   */
-  __half* greens;
-
-  /**
-   * Final blue value of the cluster.
-   */
-  __half* blues;
-
-  /**
    * Allocate ClusterState structure from memory chunk.
    *
    * @param chunk Memory chunk location.

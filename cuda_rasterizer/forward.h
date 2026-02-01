@@ -68,18 +68,18 @@ void seed_cluster_depths(dim3 grid_size, dim3 block_size, int width, int height,
  * @param features Input colors of each splat.
  * @param n_contributions Output number of splats contributing to each pixel.
  * @param cluster_depths Output cluster depths per pixel.
- * @param cluster_alphas Output final alpha per cluster.
- * @param cluster_reds Output final red value of the cluster.
- * @param cluster_greens Output final green value of the cluster.
- * @param cluster_blues Output final blue value of the cluster.
+ * @param bg_color Background color.
+ * @param inv_depth Output inverse depth per pixel.
+ * @param final_transmittance Output final transmittance oper pixel.
+ * @param out_color Output color per pixel.
  */
-void cluster(dim3 grid_size, dim3 block_size, int width, int height,
-             const uint32_t* splat_ids, const uint2* splat_id_ranges,
-             const float2* means_2d, const float4* conic_opacities,
-             const float* depths, const float* features,
-             uint32_t* n_contributions, __half* cluster_depths,
-             __half* cluster_alphas, __half* cluster_reds,
-             __half* cluster_greens, __half* cluster_blues);
+void clusterRender(dim3 grid_size, dim3 block_size, int width, int height,
+                   const uint32_t* splat_ids, const uint2* splat_id_ranges,
+                   const float2* means_2d, const float4* conic_opacities,
+                   const float* depths, const float* features,
+                   uint32_t* n_contributions, __half* cluster_depths,
+                   const float* bg_color, float* inv_depth,
+                   float* final_transmittance, float* out_color);
 
 /**
  * Alpha-composite render of clusters per pixel.

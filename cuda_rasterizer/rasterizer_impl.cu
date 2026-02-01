@@ -142,12 +142,8 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(
 }
 CudaRasterizer::ClusterState CudaRasterizer::ClusterState::fromChunk(
     char*& chunk, const size_t N) {
-  ClusterState clusters;
+  ClusterState clusters{};
   obtain(chunk, clusters.depths, N, 128);
-  obtain(chunk, clusters.alphas, N, 128);
-  obtain(chunk, clusters.reds, N, 128);
-  obtain(chunk, clusters.greens, N, 128);
-  obtain(chunk, clusters.blues, N, 128);
   return clusters;
 }
 
@@ -271,15 +267,16 @@ int CudaRasterizer::Rasterizer::forward(
   duplicateWithKeys<<<(P + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
       P, geomState.means2D, geomState.point_offsets,
       groupState.unsorted_tile_ids, groupState.unsorted_splat_ids, radii,
-      tile_grid) CHECK_CUDA(, debug)
+      tile_grid);
+  CHECK_CUDA(, debug)
 
-      // Group splats into tiles by sorting them by tile ID (16-bit radix).
-      CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
-                     groupState.grouping_space, groupState.grouping_size,
-                     groupState.unsorted_tile_ids, groupState.tile_ids,
-                     groupState.unsorted_splat_ids, groupState.splat_ids,
-                     num_rendered),
-                 debug);
+  // Group splats into tiles by sorting them by tile ID (16-bit radix).
+  CHECK_CUDA(
+      cub::DeviceRadixSort::SortPairs(
+          groupState.grouping_space, groupState.grouping_size,
+          groupState.unsorted_tile_ids, groupState.tile_ids,
+          groupState.unsorted_splat_ids, groupState.splat_ids, num_rendered),
+      debug);
 
   // Identify start and end of per-tile workloads in sorted list
   CHECK_CUDA(
@@ -299,23 +296,15 @@ int CudaRasterizer::Rasterizer::forward(
                  geomState.depths, clusterState.depths),
              debug);
 
-  // 2. Cluster splats.
+  // 2. Cluster and render splats.
   const float* features =
       colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-  CHECK_CUDA(FORWARD::cluster(
-                 tile_grid, block, width, height, groupState.splat_ids,
-                 imgState.ranges, geomState.means2D, geomState.conic_opacity,
-                 geomState.depths, features, imgState.n_contrib,
-                 clusterState.depths, clusterState.alphas, clusterState.reds,
-                 clusterState.greens, clusterState.blues),
-             debug);
-
-  // 3. Composite clusters to produce final image.
   CHECK_CUDA(
-      FORWARD::render(tile_grid, block, width, height, clusterState.depths,
-                      clusterState.alphas, clusterState.reds,
-                      clusterState.greens, clusterState.blues, background,
-                      depth, imgState.accum_alpha, out_color),
+      FORWARD::clusterRender(tile_grid, block, width, height, groupState.splat_ids,
+                       imgState.ranges, geomState.means2D,
+                       geomState.conic_opacity, geomState.depths, features,
+                       imgState.n_contrib, clusterState.depths, background,
+                       depth, imgState.accum_alpha, out_color),
       debug);
 
   return num_rendered;
