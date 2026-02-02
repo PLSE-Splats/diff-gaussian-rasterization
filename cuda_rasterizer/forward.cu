@@ -556,25 +556,24 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Convert transmittance accumulator to alpha and normalize RGB.
   for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
        ++cluster_index) {
+    // Skip cluster if empty.
+    const auto alpha_sum = cluster_alpha_sums[cluster_index];
+    if (alpha_sum <= CUDART_ZERO_FP16) continue;
+
+    // Convert transmittance to alpha.
     const auto cluster_alpha =
         CUDART_ONE_FP16 - cluster_transmittances[cluster_index];
-    const auto alpha_sum = cluster_alpha_sums[cluster_index];
 
-    // Normalize RGB (skip if empty).
-    if (alpha_sum > CUDART_ZERO_FP16) {
-      const auto alpha_sum_reciprocal = hrcp(alpha_sum) * cluster_alpha;
-      cluster_reds[cluster_index] *= alpha_sum_reciprocal;
-      cluster_greens[cluster_index] *= alpha_sum_reciprocal;
-      cluster_blues[cluster_index] *= alpha_sum_reciprocal;
-    }
+    // Normalize RGB.
+    const auto alpha_sum_reciprocal = hrcp(alpha_sum) * cluster_alpha;
+    const auto red = cluster_reds[cluster_index] * alpha_sum_reciprocal;
+    const auto green = cluster_greens[cluster_index] * alpha_sum_reciprocal;
+    const auto blue = cluster_blues[cluster_index] * alpha_sum_reciprocal;
 
     // Composite color.
-    pixel_color[0] = __hfma(cluster_reds[cluster_index], pixel_transmittance,
-                            pixel_color[0]);
-    pixel_color[1] = __hfma(cluster_greens[cluster_index], pixel_transmittance,
-                            pixel_color[1]);
-    pixel_color[2] = __hfma(cluster_blues[cluster_index], pixel_transmittance,
-                            pixel_color[2]);
+    pixel_color[0] = __hfma(red, pixel_transmittance, pixel_color[0]);
+    pixel_color[1] = __hfma(green, pixel_transmittance, pixel_color[1]);
+    pixel_color[2] = __hfma(blue, pixel_transmittance, pixel_color[2]);
 
     // Update inverse depth.
     if (inv_depth) {
