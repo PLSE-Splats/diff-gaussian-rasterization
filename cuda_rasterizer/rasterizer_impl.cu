@@ -300,7 +300,7 @@ int CudaRasterizer::Rasterizer::forward(
   const float* features =
       colors_precomp != nullptr ? colors_precomp : geomState.rgb;
   CHECK_CUDA(
-      FORWARD::clusterRender(
+      FORWARD::cluster_render(
                  tile_grid, block, width, height, groupState.splat_ids,
                  imgState.ranges, geomState.means2D, geomState.conic_opacity,
                  geomState.depths, features, background, clusterState.depths,

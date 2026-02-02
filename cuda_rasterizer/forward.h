@@ -73,62 +73,13 @@ void seed_cluster_depths(dim3 grid_size, dim3 block_size, int width, int height,
  * @param final_transmittance Output final transmittance oper pixel.
  * @param out_color Output color per pixel.
  */
-void clusterRender(dim3 grid_size, dim3 block_size, int width, int height,
-                   const uint32_t* splat_ids, const uint2* splat_id_ranges,
-                   const float2* means_2d, const float4* conic_opacities,
-                   const float* depths, const float* features,
-                   const float* bg_color, const __half* cluster_depth_seeds,
-                   uint32_t* n_contributions, float* inv_depth,
-                   float* final_transmittance, float* out_color);
-
-/**
- * Alpha-composite render of clusters per pixel.
- *
- * @param grid_size Number of blocks to launch (number of tiles in the image).
- * @param block_size Number of threads per block (size of a tile).
- * @param width Image width.
- * @param height Image height.
- * @param depths Depth of each cluster.
- * @param alphas Alpha of each cluster.
- * @param reds Red values of each cluster.
- * @param greens Green values of each cluster.
- * @param blues Blue values of each cluster.
- * @param bg_color Background color.
- * @param inv_depth Output inverse depth per pixel.
- * @param final_transmittance Output final transmittance per pixel.
- * @param out_color Output color per pixel.
- */
-void render(dim3 grid_size, dim3 block_size, int width, int height,
-            const __half* depths, const __half* alphas, const __half* reds,
-            const __half* greens, const __half* blues, const float* bg_color,
-            float* inv_depth, float* final_transmittance, float* out_color);
-
-/**
- * Cluster splats per pixel.
- *
- * @param grid_size Number of blocks to launch (number of tiles in the image).
- * @param block_size Number of threads per block (size of a tile).
- * @param width Image width.
- * @param height Image height.
- * @param splat_ids List of splat indices per tile.
- * @param splat_id_ranges Index ranges in splat list for each tile.
- * @param means_2d Input 2D means of each splat.
- * @param conic_opacities Input conic opacity of each splat.
- * @param depths Input depth of each splat.
- * @param features Input features of each splat (RGB).
- * @param n_contributions Output number of splats contributing to each pixel.
- * @param bg_color Background color.
- * @param final_transmittance Final transmittance per pixel.
- * @param invdepth Output inverse depth per pixel.
- * @param out_color Output color per pixel.
- */
 void cluster_render(dim3 grid_size, dim3 block_size, int width, int height,
                     const uint32_t* splat_ids, const uint2* splat_id_ranges,
                     const float2* means_2d, const float4* conic_opacities,
                     const float* depths, const float* features,
-                    uint32_t* n_contributions, const float* bg_color,
-                    float* final_transmittance, float* invdepth,
-                    float* out_color);
+                    const float* bg_color, const __half* cluster_depth_seeds,
+                    uint32_t* n_contributions, float* inv_depth,
+                    float* final_transmittance, float* out_color);
 }  // namespace FORWARD
 
 #endif
