@@ -418,11 +418,12 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Clustering helper variables.
   uint32_t contributor = 0;
 
-  // Local cluster data.
+  // Local cluster data (cluster alphas is used as transmittance before being
+  // converted after).
   __half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
   __half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
   __half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
-  __half pixel_cluster_transmittance[NUMBER_OF_CLUSTERS];
+  __half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
   __half pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
   __half pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
   __half pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
@@ -435,7 +436,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   }
 
   // Initialize cluster transmittance to 1.0.
-  for (auto& pixel_cluster_alpha : pixel_cluster_transmittance) {
+  for (auto& pixel_cluster_alpha : pixel_cluster_alphas) {
     pixel_cluster_alpha = CUDART_ONE_FP16;
   }
 
@@ -517,7 +518,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       // Add splat to target cluster.
       pixel_cluster_splat_counts[target_cluster_index] += CUDART_ONE_FP16;
       pixel_cluster_alpha_sums[target_cluster_index] += sample_alpha;
-      pixel_cluster_transmittance[target_cluster_index] *=
+      pixel_cluster_alphas[target_cluster_index] *=
           CUDART_ONE_FP16 - sample_alpha;
       pixel_cluster_reds[target_cluster_index] = __hfma(
           sample_alpha, sample_r, pixel_cluster_reds[target_cluster_index]);
@@ -548,27 +549,22 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Write out number of contributions.
   n_contributions[pixel_index] = contributor;
 
-  // Convert transmittance accumulator to alpha, normalize RGB, and write out
-  // cluster data.
+  // Convert transmittance accumulator to alpha and normalize RGB.
   for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
        ++cluster_index) {
-    const auto location = cluster_index * number_of_pixels + pixel_index;
     const auto cluster_alpha =
-        CUDART_ONE_FP16 - pixel_cluster_transmittance[cluster_index];
+        CUDART_ONE_FP16 - pixel_cluster_alphas[cluster_index];
     const auto alpha_sum = pixel_cluster_alpha_sums[cluster_index];
 
-    cluster_depths[location] = pixel_cluster_depths[cluster_index];
-    cluster_alphas[location] = cluster_alpha;
+    // Write converted alpha.
+    pixel_cluster_alphas[cluster_index] = cluster_alpha;
 
-    // Avoid NaN for empty clusters (alpha_sum == 0).
+    // Normalize RGB (skip if empty).
     if (alpha_sum > CUDART_ZERO_FP16) {
       const auto alpha_sum_reciprocal = hrcp(alpha_sum) * cluster_alpha;
-      cluster_reds[location] =
-          alpha_sum_reciprocal * pixel_cluster_reds[cluster_index];
-      cluster_greens[location] =
-          alpha_sum_reciprocal * pixel_cluster_greens[cluster_index];
-      cluster_blues[location] =
-          alpha_sum_reciprocal * pixel_cluster_blues[cluster_index];
+      pixel_cluster_reds[cluster_index] *= alpha_sum_reciprocal;
+      pixel_cluster_greens[cluster_index] *= alpha_sum_reciprocal;
+      pixel_cluster_blues[cluster_index] *= alpha_sum_reciprocal;
     }
   }
 }
