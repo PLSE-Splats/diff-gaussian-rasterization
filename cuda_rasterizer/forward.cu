@@ -381,8 +381,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                       const uint32_t* splat_ids, const uint2* splat_id_ranges,
                       const float2* means_2d, const float4* conic_opacities,
                       const float* depths, const float* features,
-                      uint32_t* n_contributions, __half* cluster_depths,
-                      const float* bg_color, float* inv_depth,
+                      const float* bg_color, const __half* cluster_depth_seeds,
+                      uint32_t* n_contributions, float* inv_depth,
                       float* final_transmittance, float* out_color) {
   // Gather thread information.
   const auto block = cg::this_thread_block();
@@ -418,25 +418,24 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Clustering helper variables.
   uint32_t contributor = 0;
 
-  // Local cluster data (cluster alphas is used as transmittance before being
-  // converted after).
-  __half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
-  __half pixel_cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
-  __half pixel_cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
-  __half pixel_cluster_alphas[NUMBER_OF_CLUSTERS];
-  __half pixel_cluster_reds[NUMBER_OF_CLUSTERS] = {};
-  __half pixel_cluster_greens[NUMBER_OF_CLUSTERS] = {};
-  __half pixel_cluster_blues[NUMBER_OF_CLUSTERS] = {};
+  // Cluster data.
+  __half cluster_depths[NUMBER_OF_CLUSTERS] = {};
+  __half cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
+  __half cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
+  __half cluster_transmittances[NUMBER_OF_CLUSTERS];
+  __half cluster_reds[NUMBER_OF_CLUSTERS] = {};
+  __half cluster_greens[NUMBER_OF_CLUSTERS] = {};
+  __half cluster_blues[NUMBER_OF_CLUSTERS] = {};
 
   // Pull depth seeds.
   for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
        ++cluster_index) {
-    pixel_cluster_depths[cluster_index] =
-        cluster_depths[cluster_index * number_of_pixels + pixel_index];
+    cluster_depths[cluster_index] =
+        cluster_depth_seeds[cluster_index * number_of_pixels + pixel_index];
   }
 
   // Initialize cluster transmittance to 1.0.
-  for (auto& pixel_cluster_alpha : pixel_cluster_alphas) {
+  for (auto& pixel_cluster_alpha : cluster_transmittances) {
     pixel_cluster_alpha = CUDART_ONE_FP16;
   }
 
@@ -508,7 +507,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
            ++cluster_index) {
         const __half distance_to_cluster =
-            __habs(pixel_cluster_depths[cluster_index] - sample_depth);
+            __habs(cluster_depths[cluster_index] - sample_depth);
         if (distance_to_cluster < current_closest_depth_distance) {
           current_closest_depth_distance = distance_to_cluster;
           target_cluster_index = cluster_index;
@@ -516,23 +515,23 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       }
 
       // Add splat to target cluster.
-      pixel_cluster_splat_counts[target_cluster_index] += CUDART_ONE_FP16;
-      pixel_cluster_alpha_sums[target_cluster_index] += sample_alpha;
-      pixel_cluster_alphas[target_cluster_index] *=
+      cluster_splat_counts[target_cluster_index] += CUDART_ONE_FP16;
+      cluster_alpha_sums[target_cluster_index] += sample_alpha;
+      cluster_transmittances[target_cluster_index] *=
           CUDART_ONE_FP16 - sample_alpha;
-      pixel_cluster_reds[target_cluster_index] = __hfma(
-          sample_alpha, sample_r, pixel_cluster_reds[target_cluster_index]);
-      pixel_cluster_greens[target_cluster_index] = __hfma(
-          sample_alpha, sample_g, pixel_cluster_greens[target_cluster_index]);
-      pixel_cluster_blues[target_cluster_index] = __hfma(
-          sample_alpha, sample_b, pixel_cluster_blues[target_cluster_index]);
+      cluster_reds[target_cluster_index] =
+          __hfma(sample_alpha, sample_r, cluster_reds[target_cluster_index]);
+      cluster_greens[target_cluster_index] =
+          __hfma(sample_alpha, sample_g, cluster_greens[target_cluster_index]);
+      cluster_blues[target_cluster_index] =
+          __hfma(sample_alpha, sample_b, cluster_blues[target_cluster_index]);
 
       // Update cluster depth.
-      const __half current_depth = pixel_cluster_depths[target_cluster_index];
-      const __half count_h = pixel_cluster_splat_counts[target_cluster_index];
+      const __half current_depth = cluster_depths[target_cluster_index];
+      const __half count_h = cluster_splat_counts[target_cluster_index];
       const __half depth_diff = sample_depth - current_depth;
       const __half depth_delta = depth_diff / count_h;
-      pixel_cluster_depths[target_cluster_index] = current_depth + depth_delta;
+      cluster_depths[target_cluster_index] = current_depth + depth_delta;
     }
 
     // Sync before next ingest batch.
@@ -549,23 +548,59 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Write out number of contributions.
   n_contributions[pixel_index] = contributor;
 
+  // Initialize rendering variables.
+  __half pixel_transmittance = CUDART_ONE_FP16;
+  __half expected_invdepth = CUDART_ZERO_FP16;
+  __half pixel_color[CHANNELS] = {};
+
   // Convert transmittance accumulator to alpha and normalize RGB.
   for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
        ++cluster_index) {
     const auto cluster_alpha =
-        CUDART_ONE_FP16 - pixel_cluster_alphas[cluster_index];
-    const auto alpha_sum = pixel_cluster_alpha_sums[cluster_index];
-
-    // Write converted alpha.
-    pixel_cluster_alphas[cluster_index] = cluster_alpha;
+        CUDART_ONE_FP16 - cluster_transmittances[cluster_index];
+    const auto alpha_sum = cluster_alpha_sums[cluster_index];
 
     // Normalize RGB (skip if empty).
     if (alpha_sum > CUDART_ZERO_FP16) {
       const auto alpha_sum_reciprocal = hrcp(alpha_sum) * cluster_alpha;
-      pixel_cluster_reds[cluster_index] *= alpha_sum_reciprocal;
-      pixel_cluster_greens[cluster_index] *= alpha_sum_reciprocal;
-      pixel_cluster_blues[cluster_index] *= alpha_sum_reciprocal;
+      cluster_reds[cluster_index] *= alpha_sum_reciprocal;
+      cluster_greens[cluster_index] *= alpha_sum_reciprocal;
+      cluster_blues[cluster_index] *= alpha_sum_reciprocal;
     }
+
+    // Composite color.
+    pixel_color[0] = __hfma(cluster_reds[cluster_index], pixel_transmittance,
+                            pixel_color[0]);
+    pixel_color[1] = __hfma(cluster_greens[cluster_index], pixel_transmittance,
+                            pixel_color[1]);
+    pixel_color[2] = __hfma(cluster_blues[cluster_index], pixel_transmittance,
+                            pixel_color[2]);
+
+    // Update inverse depth.
+    if (inv_depth) {
+      expected_invdepth =
+          __hfma(hrcp(cluster_depths[cluster_index]) * cluster_alpha,
+                 pixel_transmittance, expected_invdepth);
+    }
+
+    // Update transmittance.
+    pixel_transmittance *=
+        CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, cluster_alpha);
+  }
+
+  // Write out final inverse depth.
+  if (inv_depth) {
+    inv_depth[pixel_index] = __half2float(expected_invdepth);
+  }
+
+  // Write out final transmittance.
+  final_transmittance[pixel_index] = __half2float(pixel_transmittance);
+
+  // Write to color output (and apply background color).
+  for (int channel = 0; channel < CHANNELS; ++channel) {
+    out_color[channel * number_of_pixels + pixel_index] = __half2float(
+        __hfma(pixel_transmittance, __float2half(bg_color[channel]),
+               pixel_color[channel]));
   }
 }
 
@@ -947,14 +982,14 @@ void FORWARD::clusterRender(dim3 grid_size, dim3 block_size, const int width,
                             const uint2* splat_id_ranges,
                             const float2* means_2d,
                             const float4* conic_opacities, const float* depths,
-                            const float* features, uint32_t* n_contributions,
-                            __half* cluster_depths, const float* bg_color,
-                            float* inv_depth, float* final_transmittance,
-                            float* out_color) {
+                            const float* features, const float* bg_color,
+                            const __half* cluster_depth_seeds,
+                            uint32_t* n_contributions, float* inv_depth,
+                            float* final_transmittance, float* out_color) {
   clusterRenderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
-      depths, features, n_contributions, cluster_depths, bg_color, inv_depth,
-      final_transmittance, out_color);
+      depths, features, bg_color, cluster_depth_seeds, n_contributions,
+      inv_depth, final_transmittance, out_color);
 }
 void FORWARD::render(dim3 grid_size, dim3 block_size, const int width,
                      const int height, const __half* depths,
