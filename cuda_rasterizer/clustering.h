@@ -11,7 +11,7 @@
 #define NUMBER_OF_CLUSTERS 12
 #define MINIMUM_TRANSMITTANCE 0.0001f
 #define MINIMUM_SPLAT_ALPHA 0.003921f
-#define DEBUG_PIXEL -1  // 682741
+#define DEBUG_PIXEL 682741
 
 // Half constants.
 #define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
@@ -34,7 +34,7 @@ __device__ __forceinline__ void build_cluster_selector_mask(
   // Find the min distance.
   __half min_distance = __hmin(distances[0], distances[1]);
 #pragma unroll
-  for (int cluster_index = 1; cluster_index < NUMBER_OF_CLUSTERS;
+  for (int cluster_index = 2; cluster_index < NUMBER_OF_CLUSTERS;
        ++cluster_index) {
     min_distance = __hmin(min_distance, distances[cluster_index]);
   }
