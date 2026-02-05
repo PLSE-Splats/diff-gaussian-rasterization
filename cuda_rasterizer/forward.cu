@@ -500,17 +500,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       // Mask for the closest cluster.
       __half mask[NUMBER_OF_CLUSTERS] = {};
       build_cluster_selector_mask(cluster_depths, sample_depth, mask);
-      if (pixel_index == DEBUG_PIXEL && batch_index == 0) {
-        printf("%f\n", __half2float(sample_depth));
-        for (auto cluster_depth : cluster_depths) {
-          printf("%f, ", __half2float(cluster_depth));
-        }
-        printf("\n");
-        for (auto selection : mask) {
-          printf("%f, ", __half2float(selection));
-        }
-        printf("\n\n");
-      }
 
       // Add splat to target cluster.
 #pragma unroll
@@ -531,10 +520,10 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
             __hfma(selected_alpha, sample_b, cluster_blues[cluster_index]);
 
         // Update cluster depth.
-        const __half depth_diff =
-            selector * sample_depth - cluster_depths[cluster_index];
-        const __half safe_count =
-            hrcp(__hmax(CUDART_ONE_FP16, cluster_splat_counts[cluster_index]));
+        const __half depth_diff = sample_depth - cluster_depths[cluster_index];
+        const __half safe_count = __hmul(
+            selector,
+            hrcp(__hmax(CUDART_ONE_FP16, cluster_splat_counts[cluster_index])));
         cluster_depths[cluster_index] =
             __hfma(depth_diff, safe_count, cluster_depths[cluster_index]);
       }
