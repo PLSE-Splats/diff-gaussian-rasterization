@@ -28,17 +28,6 @@ __device__ const float SH_C3[] = {-0.5900435899266435f, 2.890611442640554f,
                                   -0.4570457994644658f, 1.445305721320277f,
                                   -0.5900435899266435f};
 
-// Clustering parameters.
-#define NUMBER_OF_CLUSTERS 12
-#define MINIMUM_TRANSMITTANCE 0.0001f
-#define MINIMUM_SPLAT_ALPHA 0.003921f
-#define DEBUG_PIXEL -1  // 682741
-
-// Half constants.
-#define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
-#define CUDART_ONE_FP16 __ushort_as_half((unsigned short)0x3C00U)
-#define CUDART_ZERO_FP16 __ushort_as_half((unsigned short)0x0000U)
-
 __forceinline__ __device__ float ndc2Pix(float v, int S) {
   return ((v + 1.0) * S - 1.0) * 0.5;
 }

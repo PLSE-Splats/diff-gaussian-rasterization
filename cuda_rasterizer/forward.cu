@@ -10,9 +10,9 @@
  */
 
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
 
 #include "auxiliary.h"
+#include "clustering.h"
 #include "cuda_fp16.h"
 #include "forward.h"
 namespace cg = cooperative_groups;
@@ -497,40 +497,34 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       // Collect sample depth.
       const __half sample_depth = collected_splat_depths[sample_index];
 
-      // Pick a target cluster.
-      unsigned short target_cluster_index = 0;
-      __half current_closest_depth_distance = CUDART_MAX_NORMAL_FP16;
-
-      // Find the closest in depth.
-      // | cluster depth - sample depth | < current_closest_depth_distance
-      for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
-           ++cluster_index) {
-        const __half distance_to_cluster =
-            __habs(cluster_depths[cluster_index] - sample_depth);
-        if (distance_to_cluster < current_closest_depth_distance) {
-          current_closest_depth_distance = distance_to_cluster;
-          target_cluster_index = cluster_index;
-        }
-      }
+      // Mask for the closest cluster.
+      __half mask[NUMBER_OF_CLUSTERS];
+      build_cluster_selector_mask(cluster_depths, sample_depth, mask);
 
       // Add splat to target cluster.
-      cluster_splat_counts[target_cluster_index] += CUDART_ONE_FP16;
-      cluster_alpha_sums[target_cluster_index] += sample_alpha;
-      cluster_transmittances[target_cluster_index] *=
-          CUDART_ONE_FP16 - sample_alpha;
-      cluster_reds[target_cluster_index] =
-          __hfma(sample_alpha, sample_r, cluster_reds[target_cluster_index]);
-      cluster_greens[target_cluster_index] =
-          __hfma(sample_alpha, sample_g, cluster_greens[target_cluster_index]);
-      cluster_blues[target_cluster_index] =
-          __hfma(sample_alpha, sample_b, cluster_blues[target_cluster_index]);
+#pragma unroll
+      for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
+           ++cluster_index) {
+        const __half selector = mask[cluster_index];
+        const __half selected_alpha = selector * sample_alpha;
 
-      // Update cluster depth.
-      const __half current_depth = cluster_depths[target_cluster_index];
-      const __half count_h = cluster_splat_counts[target_cluster_index];
-      const __half depth_diff = sample_depth - current_depth;
-      const __half depth_delta = depth_diff / count_h;
-      cluster_depths[target_cluster_index] = current_depth + depth_delta;
+        cluster_splat_counts[cluster_index] += selector;
+        cluster_alpha_sums[cluster_index] += selected_alpha;
+        cluster_transmittances[cluster_index] *=
+            CUDART_ONE_FP16 - selected_alpha;
+        cluster_reds[cluster_index] =
+            __hfma(selected_alpha, sample_r, cluster_reds[cluster_index]);
+        cluster_greens[cluster_index] =
+            __hfma(selected_alpha, sample_g, cluster_greens[cluster_index]);
+        cluster_blues[cluster_index] =
+            __hfma(selected_alpha, sample_b, cluster_blues[cluster_index]);
+
+        // Update cluster depth.
+        const __half depth_diff =
+            selector * sample_depth - cluster_depths[cluster_index];
+        cluster_depths[cluster_index] +=
+            depth_diff / cluster_splat_counts[cluster_index];
+      }
     }
 
     // Sync before next ingest batch.
@@ -635,14 +629,14 @@ void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size,
       depths, cluster_depths);
 }
 void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width,
-                            const int height, const uint32_t* splat_ids,
-                            const uint2* splat_id_ranges,
-                            const float2* means_2d,
-                            const float4* conic_opacities, const float* depths,
-                            const float* features, const float* bg_color,
-                            const __half* cluster_depth_seeds,
-                            uint32_t* n_contributions, float* inv_depth,
-                            float* final_transmittance, float* out_color) {
+                             const int height, const uint32_t* splat_ids,
+                             const uint2* splat_id_ranges,
+                             const float2* means_2d,
+                             const float4* conic_opacities, const float* depths,
+                             const float* features, const float* bg_color,
+                             const __half* cluster_depth_seeds,
+                             uint32_t* n_contributions, float* inv_depth,
+                             float* final_transmittance, float* out_color) {
   clusterRenderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
       depths, features, bg_color, cluster_depth_seeds, n_contributions,

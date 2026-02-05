@@ -26,6 +26,7 @@ namespace cg = cooperative_groups;
 
 #include "auxiliary.h"
 #include "backward.h"
+#include "clustering.h"
 #include "forward.h"
 
 // Helper function to find the next-highest bit of the MSB
@@ -299,13 +300,12 @@ int CudaRasterizer::Rasterizer::forward(
   // 2. Cluster and render splats.
   const float* features =
       colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-  CHECK_CUDA(
-      FORWARD::cluster_render(
+  CHECK_CUDA(FORWARD::cluster_render(
                  tile_grid, block, width, height, groupState.splat_ids,
                  imgState.ranges, geomState.means2D, geomState.conic_opacity,
                  geomState.depths, features, background, clusterState.depths,
                  imgState.n_contrib, depth, imgState.accum_alpha, out_color),
-      debug);
+             debug);
 
   return num_rendered;
 }
