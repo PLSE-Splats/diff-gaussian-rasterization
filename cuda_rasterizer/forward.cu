@@ -343,14 +343,14 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
         const __half sample_depth = collected_splat_depths[sample_index];
 
         // Seed the next unseeded cluster with this splat's depth.
-        // pixel_cluster_depths[unseeded_cluster_index / 2].x =
-        //     unseeded_cluster_index % 2 == 0
-        //         ? sample_depth
-        //         : pixel_cluster_depths[unseeded_cluster_index / 2].x;
-        // pixel_cluster_depths[unseeded_cluster_index / 2].y =
-        //     unseeded_cluster_index % 2 == 1
-        //         ? sample_depth
-        //         : pixel_cluster_depths[unseeded_cluster_index / 2].y;
+        pixel_cluster_depths[unseeded_cluster_index / 2].x =
+            unseeded_cluster_index % 2 == 0
+                ? sample_depth
+                : pixel_cluster_depths[unseeded_cluster_index / 2].x;
+        pixel_cluster_depths[unseeded_cluster_index / 2].y =
+            unseeded_cluster_index % 2 == 1
+                ? sample_depth
+                : pixel_cluster_depths[unseeded_cluster_index / 2].y;
 
         // FIXME: Consider checking if sample_depth was already used (unlikely).
 
