@@ -298,14 +298,14 @@ int CudaRasterizer::Rasterizer::forward(
              debug);
 
   // 2. Cluster and render splats.
-  const float* features =
-      colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-  CHECK_CUDA(FORWARD::cluster_render(
-                 tile_grid, block, width, height, groupState.splat_ids,
-                 imgState.ranges, geomState.means2D, geomState.conic_opacity,
-                 geomState.depths, features, background, clusterState.depths,
-                 imgState.n_contrib, depth, imgState.accum_alpha, out_color),
-             debug);
+  // const float* features =
+  //     colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+  // CHECK_CUDA(FORWARD::cluster_render(
+  //                tile_grid, block, width, height, groupState.splat_ids,
+  //                imgState.ranges, geomState.means2D, geomState.conic_opacity,
+  //                geomState.depths, features, background, clusterState.depths,
+  //                imgState.n_contrib, depth, imgState.accum_alpha, out_color),
+  //            debug);
 
   return num_rendered;
 }
