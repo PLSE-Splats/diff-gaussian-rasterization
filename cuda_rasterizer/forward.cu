@@ -640,30 +640,31 @@ void FORWARD::preprocess(int P, int D, int M, const float* means3D,
       antialiasing);
 }
 
-void seed_cluster_depths(dim3 grid_size, dim3 block_size, int width, int height,
-                         const uint32_t* __restrict__ splat_ids,
-                         const uint2* __restrict__ splat_id_ranges,
-                         const float2* __restrict__ means_2d,
-                         const float4* __restrict__ conic_opacities,
-                         const float* __restrict__ depths,
-                         __half2* __restrict__ cluster_depth_seeds) {
+void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size, int width,
+                                  int height,
+                                  const uint32_t* __restrict__ splat_ids,
+                                  const uint2* __restrict__ splat_id_ranges,
+                                  const float2* __restrict__ means_2d,
+                                  const float4* __restrict__ conic_opacities,
+                                  const float* __restrict__ depths,
+                                  __half2* __restrict__ cluster_depth_seeds) {
   seedClusterDepthsCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
       depths, cluster_depth_seeds);
 }
-void cluster_render(dim3 grid_size, dim3 block_size, int width, int height,
-                    const uint32_t* __restrict__ splat_ids,
-                    const uint2* __restrict__ splat_id_ranges,
-                    const float2* __restrict__ means_2d,
-                    const float4* __restrict__ conic_opacities,
-                    const float* __restrict__ depths,
-                    const float* __restrict__ features,
-                    const float* __restrict__ bg_color,
-                    const __half2* __restrict__ cluster_depth_seeds,
-                    uint32_t* __restrict__ n_contributions,
-                    float* __restrict__ inv_depth,
-                    float* __restrict__ final_transmittance,
-                    float* __restrict__ out_color) {
+void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, int width,
+                             int height, const uint32_t* __restrict__ splat_ids,
+                             const uint2* __restrict__ splat_id_ranges,
+                             const float2* __restrict__ means_2d,
+                             const float4* __restrict__ conic_opacities,
+                             const float* __restrict__ depths,
+                             const float* __restrict__ features,
+                             const float* __restrict__ bg_color,
+                             const __half2* __restrict__ cluster_depth_seeds,
+                             uint32_t* __restrict__ n_contributions,
+                             float* __restrict__ inv_depth,
+                             float* __restrict__ final_transmittance,
+                             float* __restrict__ out_color) {
   clusterRenderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
       depths, features, bg_color, cluster_depth_seeds, n_contributions,
