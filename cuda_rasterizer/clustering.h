@@ -85,13 +85,12 @@ __device__ __forceinline__ void build_cluster_selector_mask(
 
   // Build a mask where 1 is on the min and 0 everywhere else.
 #pragma unroll
-  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
-       ++cluster_index) {
-    mask[cluster_index] =
-        __half2(distances[cluster_index].x == min_distance ? CUDART_ONE_FP16
-                                                           : CUDART_ZERO_FP16,
-                distances[cluster_index].y == min_distance ? CUDART_ONE_FP16
-                                                           : CUDART_ZERO_FP16);
+  for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
+    mask[pair_index] =
+        __half2(distances[pair_index].x == min_distance ? CUDART_ONE_FP16
+                                                        : CUDART_ZERO_FP16,
+                distances[pair_index].y == min_distance ? CUDART_ONE_FP16
+                                                        : CUDART_ZERO_FP16);
   }
 }
 
