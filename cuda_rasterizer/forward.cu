@@ -265,7 +265,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       static_cast<float>(group_index.y * BLOCK_Y + thread_index.y)};
   const auto pixel_index = static_cast<uint32_t>(pixel_coordinate.y) * width +
                            static_cast<uint32_t>(pixel_coordinate.x);
-  const uint32_t number_of_pixels = width * height;
 
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
@@ -273,9 +272,9 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       static_cast<uint32_t>(pixel_coordinate.y) < height;
 
   // Load input range for this tile.
-  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
   const auto splat_id_range =
-      splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
+      splat_id_ranges[group_index.y * (width + BLOCK_X - 1) / BLOCK_X +
+                      group_index.x];
   int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
   const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -296,8 +295,9 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
        ++batch_index, todo -= BLOCK_SIZE) {
     // Exit if everyone is done seeding.
     if (__syncthreads_count(unseeded_cluster_index == NUMBER_OF_CLUSTERS) ==
-        BLOCK_SIZE)
+        BLOCK_SIZE) {
       break;
+    }
 
     // Collectively fetch per-splat data from global to shared.
     const unsigned int progress = batch_index * BLOCK_SIZE + thread_rank;
@@ -359,7 +359,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       }
     }
 
-    // Sync on per-thread seeding before returning to fetching.
+    // Sync on per-thread seeding before next fetch batch.
     block.sync();
   }
 
@@ -374,44 +374,46 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   sort_seeds(pixel_cluster_depths);
 
   // Write to output.
+  const auto output_base = pixel_index * NUMBER_OF_CLUSTER_PAIRS;
 #pragma unroll
-  const uint32_t output_base = pixel_index * NUMBER_OF_CLUSTER_PAIRS;
   for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
     cluster_depths[output_base + pair_index] = pixel_cluster_depths[pair_index];
   }
 }
 
 template <uint32_t CHANNELS>
-__global__ void __launch_bounds__(BLOCK_SIZE)
-    clusterRenderCUDA(const int width, const int height,
-                      const uint32_t* splat_ids, const uint2* splat_id_ranges,
-                      const float2* means_2d, const float4* conic_opacities,
-                      const float* depths, const float* features,
-                      const float* bg_color, const __half2* cluster_depth_seeds,
-                      uint32_t* n_contributions, float* inv_depth,
-                      float* final_transmittance, float* out_color) {
+__global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
+    const int width, const int height, const uint32_t* __restrict__ splat_ids,
+    const uint2* __restrict__ splat_id_ranges,
+    const float2* __restrict__ means_2d,
+    const float4* __restrict__ conic_opacities,
+    const float* __restrict__ depths, const float* __restrict__ features,
+    const float* __restrict__ bg_color,
+    const __half2* __restrict__ cluster_depth_seeds,
+    uint32_t* __restrict__ n_contributions, float* __restrict__ inv_depth,
+    float* __restrict__ final_transmittance, float* __restrict__ out_color) {
   // Gather thread information.
   const auto block = cg::this_thread_block();
-  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
   const auto group_index = block.group_index();
   const auto thread_index = block.thread_index();
   const auto thread_rank = block.thread_rank();
 
   // Gather pixel information.
-  const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X,
-                                          group_index.y * BLOCK_Y};
-  const uint2 pixel_coordinate = {minimum_pixel_coordinate.x + thread_index.x,
-                                  minimum_pixel_coordinate.y + thread_index.y};
-  const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
-  const uint32_t number_of_pixels = width * height;
+  const float2 pixel_coordinate = {
+      static_cast<float>(group_index.x * BLOCK_X + thread_index.x),
+      static_cast<float>(group_index.y * BLOCK_Y + thread_index.y)};
+  const auto pixel_index = static_cast<uint32_t>(pixel_coordinate.y) * width +
+                           static_cast<uint32_t>(pixel_coordinate.x);
 
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
-      pixel_coordinate.x < width && pixel_coordinate.y < height;
+      static_cast<uint32_t>(pixel_coordinate.x) < width &&
+      static_cast<uint32_t>(pixel_coordinate.y) < height;
 
   // Load input range for this tile.
   const auto splat_id_range =
-      splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
+      splat_id_ranges[group_index.y * (width + BLOCK_X - 1) / BLOCK_X +
+                      group_index.x];
   int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
   const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -425,24 +427,26 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   uint32_t contributor = 0;
 
   // Cluster data.
-  __half cluster_depths[NUMBER_OF_CLUSTERS] = {};
-  __half cluster_splat_counts[NUMBER_OF_CLUSTERS] = {};
-  __half cluster_alpha_sums[NUMBER_OF_CLUSTERS] = {};
-  __half cluster_transmittances[NUMBER_OF_CLUSTERS];
-  __half cluster_reds[NUMBER_OF_CLUSTERS] = {};
-  __half cluster_greens[NUMBER_OF_CLUSTERS] = {};
-  __half cluster_blues[NUMBER_OF_CLUSTERS] = {};
+  __half2 pair_depths[NUMBER_OF_CLUSTER_PAIRS] = {};
+  __half2 pair_splat_counts[NUMBER_OF_CLUSTER_PAIRS] = {};
+  __half2 pair_alpha_sums[NUMBER_OF_CLUSTER_PAIRS] = {};
+  __half2 pair_transmittances[NUMBER_OF_CLUSTER_PAIRS];
+  __half2 pair_reds[NUMBER_OF_CLUSTER_PAIRS] = {};
+  __half2 pair_greens[NUMBER_OF_CLUSTER_PAIRS] = {};
+  __half2 pair_blues[NUMBER_OF_CLUSTER_PAIRS] = {};
 
   // Pull depth seeds.
-  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
-       ++cluster_index) {
-    cluster_depths[cluster_index] =
-        cluster_depth_seeds[cluster_index * number_of_pixels + pixel_index];
+  const auto input_base = pixel_index * NUMBER_OF_CLUSTER_PAIRS;
+#pragma unroll
+  for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
+    pair_depths[pair_index] = cluster_depth_seeds[input_base + pair_index];
   }
 
   // Initialize cluster transmittance to 1.0.
-  for (auto& pixel_cluster_alpha : cluster_transmittances) {
-    pixel_cluster_alpha = CUDART_ONE_FP16;
+#pragma unroll
+  for (int pair_index = 0;  // NOLINT(*-loop-convert)
+       pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
+    pair_transmittances[pair_index] = CUDART_ONE_FP16_2;
   }
 
   // Iterate over batches until all done or range is complete.
@@ -460,83 +464,88 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       collected_conic_opacity[thread_rank] =
           conic_opacities[collected_splat_id];
     }
+
+    // Sync on collaborative fetching before per-thread seeding.
     block.sync();
 
     // Iterate over current batch (per thread).
     // Does nothing if the thread is not mapped to a valid pixel.
-    for (int sample_index = 0;
-         pixel_in_bounds && sample_index < min(BLOCK_SIZE, todo);
-         ++sample_index) {
-      // Collect sample ID.
-      const uint32_t sample_splat_id = collected_splat_ids[sample_index];
+    if (pixel_in_bounds) {
+      for (int sample_index = 0; sample_index < min(BLOCK_SIZE, todo);
+           ++sample_index) {
+        // Collect sample ID.
+        const uint32_t sample_splat_id = collected_splat_ids[sample_index];
 
-      // Keep track of current position in range.
-      contributor++;
+        // Keep track of current position in range.
+        contributor++;
 
-      // Compute splat alpha (determines if it's in this pixel).
+        // Compute splat alpha (determines if it's in this pixel).
 
-      // Resample using conic matrix (cf. "Surface
-      // Splatting" by Zwicker et al., 2001)
-      const float2 xy = collected_means_2d[sample_index];
-      const float2 d = {xy.x - static_cast<float>(pixel_coordinate.x),
-                        xy.y - static_cast<float>(pixel_coordinate.y)};
-      const float4 con_o = collected_conic_opacity[sample_index];
-      const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
-                          con_o.y * d.x * d.y;
-      if (power > 0.0f) continue;
+        // Resample using conic matrix (cf. "Surface
+        // Splatting" by Zwicker et al., 2001)
+        const float2 xy = collected_means_2d[sample_index];
+        const float2 d = {xy.x - pixel_coordinate.x, xy.y - pixel_coordinate.y};
+        const float4 con_o = collected_conic_opacity[sample_index];
+        const float power =
+            -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
+            con_o.y * d.x * d.y;
+        if (power > 0.0f) continue;
 
-      // Eq. (2) from 3D Gaussian splatting paper.
-      // Obtain alpha by multiplying with Gaussian opacity
-      // and its exponential falloff from mean.
-      // Avoid numerical instabilities (see paper appendix).
-      const float sample_alpha_float = min(0.99f, con_o.w * exp(power));
-      if (sample_alpha_float < MINIMUM_SPLAT_ALPHA) continue;
-      const __half sample_alpha = __float2half(sample_alpha_float);
+        // Eq. (2) from 3D Gaussian splatting paper.
+        // Obtain alpha by multiplying with Gaussian opacity
+        // and its exponential falloff from mean.
+        // Avoid numerical instabilities (see paper appendix).
+        const float sample_alpha_float = min(0.99f, con_o.w * __expf(power));
+        if (sample_alpha_float < MINIMUM_SPLAT_ALPHA) continue;
 
-      // Collect color.
-      const __half sample_r =
-          __float2half(features[sample_splat_id * CHANNELS + 0]);
-      const __half sample_g =
-          __float2half(features[sample_splat_id * CHANNELS + 1]);
-      const __half sample_b =
-          __float2half(features[sample_splat_id * CHANNELS + 2]);
+        // Broadcast alpha.
+        const __half2 sample_alpha = __float2half2_rn(sample_alpha_float);
 
-      // Collect sample depth.
-      const __half sample_depth = collected_splat_depths[sample_index];
+        // Collect color and broadcast.
+        const __half2 sample_r =
+            __float2half2_rn(features[sample_splat_id * CHANNELS + 0]);
+        const __half2 sample_g =
+            __float2half2_rn(features[sample_splat_id * CHANNELS + 1]);
+        const __half2 sample_b =
+            __float2half2_rn(features[sample_splat_id * CHANNELS + 2]);
 
-      // Mask for the closest cluster.
-      __half mask[NUMBER_OF_CLUSTERS] = {};
-      build_cluster_selector_mask(cluster_depths, sample_depth, mask);
+        // Collect sample depth.
+        const __half sample_depth = collected_splat_depths[sample_index];
+        const auto sample_depth_2 = __half2half2(sample_depth);
 
-      // Add splat to target cluster.
+        // Mask for the closest cluster.
+        __half2 mask[NUMBER_OF_CLUSTER_PAIRS] = {};
+        build_cluster_selector_mask(pair_depths, sample_depth, mask);
+
+        // Add splat to target cluster.
 #pragma unroll
-      for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
-           ++cluster_index) {
-        const __half selector = mask[cluster_index];
-        const __half selected_alpha = selector * sample_alpha;
+        for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS;
+             ++pair_index) {
+          const __half2 selector = mask[pair_index];
+          const __half2 selected_alpha = selector * sample_alpha;
 
-        cluster_splat_counts[cluster_index] += selector;
-        cluster_alpha_sums[cluster_index] += selected_alpha;
-        cluster_transmittances[cluster_index] *=
-            CUDART_ONE_FP16 - selected_alpha;
-        cluster_reds[cluster_index] =
-            __hfma(selected_alpha, sample_r, cluster_reds[cluster_index]);
-        cluster_greens[cluster_index] =
-            __hfma(selected_alpha, sample_g, cluster_greens[cluster_index]);
-        cluster_blues[cluster_index] =
-            __hfma(selected_alpha, sample_b, cluster_blues[cluster_index]);
+          pair_splat_counts[pair_index] += selector;
+          pair_alpha_sums[pair_index] += selected_alpha;
+          pair_transmittances[pair_index] *= CUDART_ONE_FP16_2 - selected_alpha;
+          pair_reds[pair_index] =
+              __hfma2(selected_alpha, sample_r, pair_reds[pair_index]);
+          pair_greens[pair_index] =
+              __hfma2(selected_alpha, sample_g, pair_greens[pair_index]);
+          pair_blues[pair_index] =
+              __hfma2(selected_alpha, sample_b, pair_blues[pair_index]);
 
-        // Update cluster depth.
-        const __half depth_diff = sample_depth - cluster_depths[cluster_index];
-        const __half safe_count = __hmul(
-            selector,
-            hrcp(__hmax(CUDART_ONE_FP16, cluster_splat_counts[cluster_index])));
-        cluster_depths[cluster_index] =
-            __hfma(depth_diff, safe_count, cluster_depths[cluster_index]);
+          // Update cluster depth.
+          const __half2 depth_diff = sample_depth_2 - pair_depths[pair_index];
+          const __half2 safe_count =
+              selector *
+              h2rcp(__hmax2(CUDART_ONE_FP16_2, pair_splat_counts[pair_index]));
+          pair_depths[pair_index] =
+              __hfma2(depth_diff, safe_count, pair_depths[pair_index]);
+        }
       }
     }
 
-    // Sync before next ingest batch.
+    // Sync on per-thread seeding before next fetch batch.
     block.sync();
   }
 
@@ -552,41 +561,44 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 
   // Initialize rendering variables.
   __half pixel_transmittance = CUDART_ONE_FP16;
+  __half pixel_red = CUDART_ZERO_FP16;
+  __half pixel_green = CUDART_ZERO_FP16;
+  __half pixel_blue = CUDART_ZERO_FP16;
   __half expected_invdepth = CUDART_ZERO_FP16;
-  __half pixel_color[CHANNELS] = {};
 
-  // Convert transmittance accumulator to alpha and normalize RGB.
-  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
-       ++cluster_index) {
-    // Skip cluster if empty.
-    const auto alpha_sum = cluster_alpha_sums[cluster_index];
-    if (alpha_sum <= CUDART_ZERO_FP16) continue;
-
+  // Composite cluster to pixel color.
+  for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
     // Convert transmittance to alpha.
-    const auto cluster_alpha =
-        CUDART_ONE_FP16 - cluster_transmittances[cluster_index];
+    const auto pair_alpha = CUDART_ONE_FP16_2 - pair_transmittances[pair_index];
 
     // Normalize RGB.
-    const auto alpha_sum_reciprocal = hrcp(alpha_sum) * cluster_alpha;
-    const auto red = cluster_reds[cluster_index] * alpha_sum_reciprocal;
-    const auto green = cluster_greens[cluster_index] * alpha_sum_reciprocal;
-    const auto blue = cluster_blues[cluster_index] * alpha_sum_reciprocal;
+    const auto alpha_sum_reciprocal =
+        h2rcp(__hmax2(CUDART_ONE_FP16_2, pair_alpha_sums[pair_index])) *
+        pair_alpha;
+    const auto red = pair_reds[pair_index] * alpha_sum_reciprocal;
+    const auto green = pair_greens[pair_index] * alpha_sum_reciprocal;
+    const auto blue = pair_blues[pair_index] * alpha_sum_reciprocal;
 
     // Composite color.
-    pixel_color[0] = __hfma(red, pixel_transmittance, pixel_color[0]);
-    pixel_color[1] = __hfma(green, pixel_transmittance, pixel_color[1]);
-    pixel_color[2] = __hfma(blue, pixel_transmittance, pixel_color[2]);
-
-    // Update inverse depth.
+    pixel_red = __hfma(red.x, pixel_transmittance, pixel_red);
+    pixel_green = __hfma(green.x, pixel_transmittance, pixel_green);
+    pixel_blue = __hfma(blue.x, pixel_transmittance, pixel_blue);
     if (inv_depth) {
-      expected_invdepth =
-          __hfma(hrcp(cluster_depths[cluster_index]) * cluster_alpha,
-                 pixel_transmittance, expected_invdepth);
+      expected_invdepth = __hfma(hrcp(pair_depths[pair_index].x) * pair_alpha.x,
+                                 pixel_transmittance, expected_invdepth);
     }
-
-    // Update transmittance.
     pixel_transmittance *=
-        CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, cluster_alpha);
+        CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, pair_alpha.x);
+
+    pixel_red = __hfma(red.y, pixel_transmittance, pixel_red);
+    pixel_green = __hfma(green.y, pixel_transmittance, pixel_green);
+    pixel_blue = __hfma(blue.y, pixel_transmittance, pixel_blue);
+    if (inv_depth) {
+      expected_invdepth = __hfma(hrcp(pair_depths[pair_index].y) * pair_alpha.y,
+                                 pixel_transmittance, expected_invdepth);
+    }
+    pixel_transmittance *=
+        CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, pair_alpha.y);
   }
 
   // Write out final inverse depth.
@@ -598,11 +610,13 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   final_transmittance[pixel_index] = __half2float(pixel_transmittance);
 
   // Write to color output (and apply background color).
-  for (int channel = 0; channel < CHANNELS; ++channel) {
-    out_color[channel * number_of_pixels + pixel_index] = __half2float(
-        __hfma(pixel_transmittance, __float2half(bg_color[channel]),
-               pixel_color[channel]));
-  }
+  const auto number_of_pixels = width * height;
+  out_color[0 * number_of_pixels + pixel_index] = __half2float(
+      __hfma(pixel_transmittance, __float2half(bg_color[0]), pixel_red));
+  out_color[1 * number_of_pixels + pixel_index] = __half2float(
+      __hfma(pixel_transmittance, __float2half(bg_color[0]), pixel_green));
+  out_color[2 * number_of_pixels + pixel_index] = __half2float(
+      __hfma(pixel_transmittance, __float2half(bg_color[0]), pixel_blue));
 }
 
 void FORWARD::preprocess(int P, int D, int M, const float* means3D,

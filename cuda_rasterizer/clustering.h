@@ -17,6 +17,7 @@
 // Half constants.
 #define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
 #define CUDART_ONE_FP16 __ushort_as_half((unsigned short)0x3C00U)
+#define CUDART_ONE_FP16_2 __half2half2(CUDART_ONE_FP16)
 #define CUDART_ZERO_FP16 __ushort_as_half((unsigned short)0x0000U)
 
 /**
