@@ -255,24 +255,25 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                           __half2* __restrict__ cluster_depths) {
   // Gather thread information.
   const auto block = cg::this_thread_block();
-  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
   const auto group_index = block.group_index();
   const auto thread_index = block.thread_index();
   const auto thread_rank = block.thread_rank();
 
   // Gather pixel information.
-  const uint2 minimum_pixel_coordinate = {group_index.x * BLOCK_X,
-                                          group_index.y * BLOCK_Y};
-  const uint2 pixel_coordinate = {minimum_pixel_coordinate.x + thread_index.x,
-                                  minimum_pixel_coordinate.y + thread_index.y};
-  const uint32_t pixel_index = width * pixel_coordinate.y + pixel_coordinate.x;
+  const float2 pixel_coordinate = {
+      static_cast<float>(group_index.x * BLOCK_X + thread_index.x),
+      static_cast<float>(group_index.y * BLOCK_Y + thread_index.y)};
+  const auto pixel_index = static_cast<uint32_t>(pixel_coordinate.y) * width +
+                           static_cast<uint32_t>(pixel_coordinate.x);
   const uint32_t number_of_pixels = width * height;
 
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
-      pixel_coordinate.x < width && pixel_coordinate.y < height;
+      static_cast<uint32_t>(pixel_coordinate.x) < width &&
+      static_cast<uint32_t>(pixel_coordinate.y) < height;
 
   // Load input range for this tile.
+  const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
   const auto splat_id_range =
       splat_id_ranges[group_index.y * horizontal_blocks + group_index.x];
   int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
@@ -284,16 +285,20 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 
   // Local cluster data.
-  __half pixel_cluster_depths[NUMBER_OF_CLUSTERS] = {};
+  __half2 pixel_cluster_depths[NUMBER_OF_CLUSTER_PAIRS] = {};
 
   // Which cluster needs to be seeded. Thread stops when all clusters are
   // seeded.
   unsigned short unseeded_cluster_index = 0;
 
   // Iterate over batches until all done or range is complete.
-  for (int batch_index = 0;
-       batch_index < rounds && unseeded_cluster_index < NUMBER_OF_CLUSTERS;
+  for (int batch_index = 0; batch_index < rounds;
        ++batch_index, todo -= BLOCK_SIZE) {
+    // Exit if everyone is done seeding.
+    if (__syncthreads_count(unseeded_cluster_index == NUMBER_OF_CLUSTERS) ==
+        BLOCK_SIZE)
+      break;
+
     // Collectively fetch per-splat data from global to shared.
     const unsigned int progress = batch_index * BLOCK_SIZE + thread_rank;
     if (splat_id_range.x + progress < splat_id_range.y) {
@@ -305,44 +310,57 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
       collected_conic_opacity[thread_rank] =
           conic_opacities[collected_splat_id];
     }
+
+    // Sync on collaborative fetching before per-thread seeding.
     block.sync();
 
     // Iterate over current batch (per thread).
     // Does nothing if the thread is not mapped to a valid pixel (done).
-    for (int sample_index = 0;
-         pixel_in_bounds && unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
-         sample_index < min(BLOCK_SIZE, todo);
-         ++sample_index) {
-      // Compute splat alpha (determines if it's in this pixel).
+    if (pixel_in_bounds) {
+      for (int sample_index = 0; unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
+                                 sample_index < min(BLOCK_SIZE, todo);
+           ++sample_index) {
+        // Compute splat alpha (determines if it's in this pixel).
 
-      // Resample using conic matrix (cf. "Surface
-      // Splatting" by Zwicker et al., 2001)
-      const float2 xy = collected_means_2d[sample_index];
-      const float2 d = {xy.x - static_cast<float>(pixel_coordinate.x),
-                        xy.y - static_cast<float>(pixel_coordinate.y)};
-      const float4 con_o = collected_conic_opacity[sample_index];
-      const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
-                          con_o.y * d.x * d.y;
-      if (power > 0.0f) continue;
+        // Resample using conic matrix (cf. "Surface
+        // Splatting" by Zwicker et al., 2001)
+        const float2 xy = collected_means_2d[sample_index];
+        const float2 d = {xy.x - pixel_coordinate.x, xy.y - pixel_coordinate.y};
+        const float4 con_o = collected_conic_opacity[sample_index];
+        const float power =
+            -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
+            con_o.y * d.x * d.y;
+        if (power > 0.0f) continue;
 
-      // Eq. (2) from 3D Gaussian splatting paper.
-      // Obtain alpha by multiplying with Gaussian opacity
-      // and its exponential falloff from mean.
-      // Avoid numerical instabilities (see paper appendix).
-      const float sample_alpha_float = min(0.99f, con_o.w * exp(power));
-      if (sample_alpha_float < MINIMUM_SPLAT_ALPHA) continue;
+        // Eq. (2) from 3D Gaussian splatting paper.
+        // Obtain alpha by multiplying with Gaussian opacity
+        // and its exponential falloff from mean.
+        // Avoid numerical instabilities (see paper appendix).
+        const float sample_alpha_float = min(0.99f, con_o.w * __expf(power));
+        if (sample_alpha_float < MINIMUM_SPLAT_ALPHA) continue;
 
-      // Collect sample depth.
-      const __half sample_depth = collected_splat_depths[sample_index];
+        // Collect sample depth.
+        const __half sample_depth = collected_splat_depths[sample_index];
 
-      // Seed the next unseeded cluster with this splat's depth.
-      pixel_cluster_depths[unseeded_cluster_index] = sample_depth;
+        // Seed the next unseeded cluster with this splat's depth.
+        pixel_cluster_depths[unseeded_cluster_index / 2].x =
+            unseeded_cluster_index % 2 == 0
+                ? sample_depth
+                : pixel_cluster_depths[unseeded_cluster_index / 2].x;
+        pixel_cluster_depths[unseeded_cluster_index / 2].y =
+            unseeded_cluster_index % 2 == 1
+                ? sample_depth
+                : pixel_cluster_depths[unseeded_cluster_index / 2].y;
 
-      // FIXME: Consider checking if sample_depth was already used (unlikely).
+        // FIXME: Consider checking if sample_depth was already used (unlikely).
 
-      // Move to next unseeded cluster for next time.
-      unseeded_cluster_index++;
+        // Move to next unseeded cluster for next time.
+        unseeded_cluster_index++;
+      }
     }
+
+    // Sync on per-thread seeding before returning to fetching.
+    block.sync();
   }
 
   // Seeding is complete, write out to global memory in depth order.
@@ -352,22 +370,14 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     return;
   }
 
-  // Write out cluster depths in sorted order.
-  __half last_value = CUDART_ZERO_FP16;
-  for (int cluster_index = 0; cluster_index < NUMBER_OF_CLUSTERS;
-       ++cluster_index) {
-    // Find candidate such that last_value < candidate < current_lowest.
-    __half current_lowest = CUDART_MAX_NORMAL_FP16;
-    for (const auto candidate : pixel_cluster_depths) {
-      if (last_value < candidate && candidate < current_lowest) {
-        current_lowest = candidate;
-      }
-    }
-    last_value = current_lowest;
+  // Sort seeds.
+  sort_seeds(pixel_cluster_depths);
 
-    // Write out the found candidate.
-    cluster_depths[cluster_index * number_of_pixels + pixel_index] =
-        current_lowest;
+  // Write to output.
+#pragma unroll
+  const uint32_t output_base = pixel_index * NUMBER_OF_CLUSTER_PAIRS;
+  for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
+    cluster_depths[output_base + pair_index] = pixel_cluster_depths[pair_index];
   }
 }
 
