@@ -22,7 +22,7 @@
 /**
  * In-place swap sort for depth seeds.
  *
- * @param seeds Depth seeds.
+ * @param seeds Depth seeds as pairs of clusters.
  */
 __device__ __forceinline__ void sort_seeds(__half2* __restrict__ seeds) {
 #pragma unroll
@@ -57,9 +57,9 @@ __device__ __forceinline__ void sort_seeds(__half2* __restrict__ seeds) {
 /**
  * Compute a mask on the clusters to apply a sample to.
  *
- * @param cluster_depths Current cluster depths.
+ * @param cluster_depths Current cluster depth as pairs of clusters.
  * @param sample_depth Sample depth to find cluster for.
- * @param mask Output mask on depths.
+ * @param mask Output mask on depths as pairs of clusters.
  */
 __device__ __forceinline__ void build_cluster_selector_mask(
     const __half2* __restrict__ cluster_depths, const __half sample_depth,

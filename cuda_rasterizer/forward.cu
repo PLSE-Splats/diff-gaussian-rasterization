@@ -250,7 +250,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                           const uint32_t* splat_ids,
                           const uint2* splat_id_ranges, const float2* means_2d,
                           const float4* conic_opacities, const float* depths,
-                          __half* cluster_depths) {
+                          __half2* cluster_depths) {
   // Gather thread information.
   const auto block = cg::this_thread_block();
   const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
@@ -380,7 +380,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                       const uint32_t* splat_ids, const uint2* splat_id_ranges,
                       const float2* means_2d, const float4* conic_opacities,
                       const float* depths, const float* features,
-                      const float* bg_color, const __half* cluster_depth_seeds,
+                      const float* bg_color, const __half2* cluster_depth_seeds,
                       uint32_t* n_contributions, float* inv_depth,
                       float* final_transmittance, float* out_color) {
   // Gather thread information.
@@ -625,7 +625,7 @@ void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size,
                                   const uint2* splat_id_ranges,
                                   const float2* means_2d,
                                   const float4* conic_opacities,
-                                  const float* depths, __half* cluster_depths) {
+                                  const float* depths, __half2* cluster_depths) {
   seedClusterDepthsCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
       depths, cluster_depths);
@@ -636,7 +636,7 @@ void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width,
                              const float2* means_2d,
                              const float4* conic_opacities, const float* depths,
                              const float* features, const float* bg_color,
-                             const __half* cluster_depth_seeds,
+                             const __half2* cluster_depth_seeds,
                              uint32_t* n_contributions, float* inv_depth,
                              float* final_transmittance, float* out_color) {
   clusterRenderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(

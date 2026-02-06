@@ -55,13 +55,13 @@ struct ClusterState {
   /**
    * Cluster depths.
    */
-  __half* depths;
+  __half2* depths;
 
   /**
    * Allocate ClusterState structure from memory chunk.
    *
    * @param chunk Memory chunk location.
-   * @param N Number of elements to allocate (pixels * clusters per pixel).
+   * @param N Number of elements to allocate (pixels * cluster pairs per pixel).
    * @return Allocated ClusterState structure.
    */
   static ClusterState fromChunk(char*& chunk, size_t N);

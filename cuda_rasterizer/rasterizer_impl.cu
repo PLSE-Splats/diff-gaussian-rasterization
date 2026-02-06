@@ -209,10 +209,10 @@ int CudaRasterizer::Rasterizer::forward(
 
   // Allocate space for clustering results.
   const size_t clusters_chunk_size =
-      required<ClusterState>(width * height * NUMBER_OF_CLUSTERS);
+      required<ClusterState>(width * height * NUMBER_OF_CLUSTER_PAIRS);
   char* cluster_chunkptr = clusterBuffer(clusters_chunk_size);
   ClusterState clusterState = ClusterState::fromChunk(
-      cluster_chunkptr, width * height * NUMBER_OF_CLUSTERS);
+      cluster_chunkptr, width * height * NUMBER_OF_CLUSTER_PAIRS);
 
   if (radii == nullptr) {
     radii = geomState.internal_radii;
