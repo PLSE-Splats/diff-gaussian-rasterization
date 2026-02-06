@@ -247,10 +247,12 @@ __global__ void preprocessCUDA(
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE)
     seedClusterDepthsCUDA(const int width, const int height,
-                          const uint32_t* splat_ids,
-                          const uint2* splat_id_ranges, const float2* means_2d,
-                          const float4* conic_opacities, const float* depths,
-                          __half2* cluster_depths) {
+                          const uint32_t* __restrict__ splat_ids,
+                          const uint2* __restrict__ splat_id_ranges,
+                          const float2* __restrict__ means_2d,
+                          const float4* __restrict__ conic_opacities,
+                          const float* __restrict__ depths,
+                          __half2* __restrict__ cluster_depths) {
   // Gather thread information.
   const auto block = cg::this_thread_block();
   const uint32_t horizontal_blocks = (width + BLOCK_X - 1) / BLOCK_X;
@@ -277,7 +279,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
   // Allocate storage for batches of collectively fetched data.
-  __shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
   __shared__ __half collected_splat_depths[BLOCK_SIZE];
   __shared__ float2 collected_means_2d[BLOCK_SIZE];
   __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
@@ -298,7 +299,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
     if (splat_id_range.x + progress < splat_id_range.y) {
       const uint32_t collected_splat_id =
           splat_ids[splat_id_range.x + progress];
-      collected_splat_ids[thread_rank] = collected_splat_id;
       collected_splat_depths[thread_rank] =
           __float2half(depths[collected_splat_id]);
       collected_means_2d[thread_rank] = means_2d[collected_splat_id];
@@ -313,9 +313,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
          pixel_in_bounds && unseeded_cluster_index < NUMBER_OF_CLUSTERS &&
          sample_index < min(BLOCK_SIZE, todo);
          ++sample_index) {
-      // Collect sample ID.
-      const uint32_t sample_splat_id = collected_splat_ids[sample_index];
-
       // Compute splat alpha (determines if it's in this pixel).
 
       // Resample using conic matrix (cf. "Surface
@@ -619,26 +616,30 @@ void FORWARD::preprocess(int P, int D, int M, const float* means3D,
       antialiasing);
 }
 
-void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size,
-                                  const int width, const int height,
-                                  const uint32_t* splat_ids,
-                                  const uint2* splat_id_ranges,
-                                  const float2* means_2d,
-                                  const float4* conic_opacities,
-                                  const float* depths, __half2* cluster_depths) {
+void seed_cluster_depths(dim3 grid_size, dim3 block_size, int width, int height,
+                         const uint32_t* __restrict__ splat_ids,
+                         const uint2* __restrict__ splat_id_ranges,
+                         const float2* __restrict__ means_2d,
+                         const float4* __restrict__ conic_opacities,
+                         const float* __restrict__ depths,
+                         __half2* __restrict__ cluster_depth_seeds) {
   seedClusterDepthsCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
-      depths, cluster_depths);
+      depths, cluster_depth_seeds);
 }
-void FORWARD::cluster_render(dim3 grid_size, dim3 block_size, const int width,
-                             const int height, const uint32_t* splat_ids,
-                             const uint2* splat_id_ranges,
-                             const float2* means_2d,
-                             const float4* conic_opacities, const float* depths,
-                             const float* features, const float* bg_color,
-                             const __half2* cluster_depth_seeds,
-                             uint32_t* n_contributions, float* inv_depth,
-                             float* final_transmittance, float* out_color) {
+void cluster_render(dim3 grid_size, dim3 block_size, int width, int height,
+                    const uint32_t* __restrict__ splat_ids,
+                    const uint2* __restrict__ splat_id_ranges,
+                    const float2* __restrict__ means_2d,
+                    const float4* __restrict__ conic_opacities,
+                    const float* __restrict__ depths,
+                    const float* __restrict__ features,
+                    const float* __restrict__ bg_color,
+                    const __half2* __restrict__ cluster_depth_seeds,
+                    uint32_t* __restrict__ n_contributions,
+                    float* __restrict__ inv_depth,
+                    float* __restrict__ final_transmittance,
+                    float* __restrict__ out_color) {
   clusterRenderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
       width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
       depths, features, bg_color, cluster_depth_seeds, n_contributions,

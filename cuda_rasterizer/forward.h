@@ -49,10 +49,12 @@ void preprocess(int P, int D, int M, const float* orig_points,
  * sets of cluster pairs per pixel).
  */
 void seed_cluster_depths(dim3 grid_size, dim3 block_size, int width, int height,
-                         const uint32_t* splat_ids,
-                         const uint2* splat_id_ranges, const float2* means_2d,
-                         const float4* conic_opacities, const float* depths,
-                         __half2* cluster_depth_seeds);
+                         const uint32_t* __restrict__ splat_ids,
+                         const uint2* __restrict__ splat_id_ranges,
+                         const float2* __restrict__ means_2d,
+                         const float4* __restrict__ conic_opacities,
+                         const float* __restrict__ depths,
+                         __half2* __restrict__ cluster_depth_seeds);
 
 /**
  * Cluster splats per pixel.
@@ -76,12 +78,18 @@ void seed_cluster_depths(dim3 grid_size, dim3 block_size, int width, int height,
  * @param out_color Output color per pixel.
  */
 void cluster_render(dim3 grid_size, dim3 block_size, int width, int height,
-                    const uint32_t* splat_ids, const uint2* splat_id_ranges,
-                    const float2* means_2d, const float4* conic_opacities,
-                    const float* depths, const float* features,
-                    const float* bg_color, const __half2* cluster_depth_seeds,
-                    uint32_t* n_contributions, float* inv_depth,
-                    float* final_transmittance, float* out_color);
+                    const uint32_t* __restrict__ splat_ids,
+                    const uint2* __restrict__ splat_id_ranges,
+                    const float2* __restrict__ means_2d,
+                    const float4* __restrict__ conic_opacities,
+                    const float* __restrict__ depths,
+                    const float* __restrict__ features,
+                    const float* __restrict__ bg_color,
+                    const __half2* __restrict__ cluster_depth_seeds,
+                    uint32_t* __restrict__ n_contributions,
+                    float* __restrict__ inv_depth,
+                    float* __restrict__ final_transmittance,
+                    float* __restrict__ out_color);
 }  // namespace FORWARD
 
 #endif
