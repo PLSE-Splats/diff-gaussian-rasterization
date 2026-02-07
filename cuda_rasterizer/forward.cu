@@ -382,7 +382,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
 
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
-    const int width, const int height, const uint32_t* __restrict__ splat_ids,
+    const int width, const int height, const unsigned int grid_width,
+    const uint32_t* __restrict__ splat_ids,
     const uint2* __restrict__ splat_id_ranges,
     const float2* __restrict__ means_2d,
     const float4* __restrict__ conic_opacities,
@@ -398,21 +399,20 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
   const auto thread_rank = block.thread_rank();
 
   // Gather pixel information.
-  const float2 pixel_coordinate = {
-      static_cast<float>(group_index.x * BLOCK_X + thread_index.x),
-      static_cast<float>(group_index.y * BLOCK_Y + thread_index.y)};
-  const auto pixel_index = static_cast<uint32_t>(pixel_coordinate.y) * width +
-                           static_cast<uint32_t>(pixel_coordinate.x);
+  const uint2 pixel_coordinate = {group_index.x * BLOCK_X + thread_index.x,
+                                  group_index.y * BLOCK_Y + thread_index.y};
+  const float2 pixel_coordinate_float = {
+      static_cast<float>(pixel_coordinate.x),
+      static_cast<float>(pixel_coordinate.y)};
+  const auto pixel_index = pixel_coordinate.y * width + pixel_coordinate.x;
 
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
-      static_cast<uint32_t>(pixel_coordinate.x) < width &&
-      static_cast<uint32_t>(pixel_coordinate.y) < height;
+      pixel_coordinate.x < width && pixel_coordinate.y < height;
 
   // Load input range for this tile.
   const auto splat_id_range =
-      splat_id_ranges[group_index.y * (width + BLOCK_X - 1) / BLOCK_X +
-                      group_index.x];
+      splat_id_ranges[group_index.y * grid_width + group_index.x];
   int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
   const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -487,7 +487,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
         // Resample using conic matrix (cf. "Surface
         // Splatting" by Zwicker et al., 2001)
         const float2 xy = collected_means_2d[sample_index];
-        const float2 d = {xy.x - pixel_coordinate.x, xy.y - pixel_coordinate.y};
+        const float2 d = {xy.x - pixel_coordinate_float.x,
+                          xy.y - pixel_coordinate_float.y};
         const float4 con_o = collected_conic_opacity[sample_index];
         const float power =
             -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
@@ -617,9 +618,9 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
   out_color[0 * number_of_pixels + pixel_index] = __half2float(
       __hfma(pixel_transmittance, __float2half(bg_color[0]), pixel_red));
   out_color[1 * number_of_pixels + pixel_index] = __half2float(
-      __hfma(pixel_transmittance, __float2half(bg_color[0]), pixel_green));
+      __hfma(pixel_transmittance, __float2half(bg_color[1]), pixel_green));
   out_color[2 * number_of_pixels + pixel_index] = __half2float(
-      __hfma(pixel_transmittance, __float2half(bg_color[0]), pixel_blue));
+      __hfma(pixel_transmittance, __float2half(bg_color[2]), pixel_blue));
 }
 
 void FORWARD::preprocess(int P, int D, int M, const float* means3D,
@@ -667,7 +668,7 @@ void FORWARD::cluster_render(
     uint32_t* __restrict__ n_contributions, float* __restrict__ inv_depth,
     float* __restrict__ final_transmittance, float* __restrict__ out_color) {
   clusterRenderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
-      width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
-      depths, features, bg_color, cluster_depth_seeds, n_contributions,
-      inv_depth, final_transmittance, out_color);
+      width, height, grid_size.x, splat_ids, splat_id_ranges, means_2d,
+      conic_opacities, depths, features, bg_color, cluster_depth_seeds,
+      n_contributions, inv_depth, final_transmittance, out_color);
 }
