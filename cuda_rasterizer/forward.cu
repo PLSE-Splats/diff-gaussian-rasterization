@@ -526,25 +526,27 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
         for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS;
              ++pair_index) {
           const __half2 selector = mask[pair_index];
-          const __half2 selected_alpha = selector * sample_alpha;
+          if (selector.x == ONE_FP16 || selector.y == ONE_FP16) {
+            const __half2 selected_alpha = selector * sample_alpha;
 
-          pair_splat_counts[pair_index] += selector;
-          pair_alpha_sums[pair_index] += selected_alpha;
-          pair_transmittances[pair_index] *= ONE_FP16_2 - selected_alpha;
-          pair_reds[pair_index] =
-              __hfma2(selected_alpha, sample_r, pair_reds[pair_index]);
-          pair_greens[pair_index] =
-              __hfma2(selected_alpha, sample_g, pair_greens[pair_index]);
-          pair_blues[pair_index] =
-              __hfma2(selected_alpha, sample_b, pair_blues[pair_index]);
+            pair_splat_counts[pair_index] += selector;
+            pair_alpha_sums[pair_index] += selected_alpha;
+            pair_transmittances[pair_index] *= ONE_FP16_2 - selected_alpha;
+            pair_reds[pair_index] =
+                __hfma2(selected_alpha, sample_r, pair_reds[pair_index]);
+            pair_greens[pair_index] =
+                __hfma2(selected_alpha, sample_g, pair_greens[pair_index]);
+            pair_blues[pair_index] =
+                __hfma2(selected_alpha, sample_b, pair_blues[pair_index]);
 
-          // Update cluster depth.
-          const __half2 depth_diff = sample_depth_2 - pair_depths[pair_index];
-          const __half2 safe_count =
-              selector *
-              h2rcp(__hmax2(SMALL_FP16_2, pair_splat_counts[pair_index]));
-          pair_depths[pair_index] =
-              __hfma2(depth_diff, safe_count, pair_depths[pair_index]);
+            // Update cluster depth.
+            const __half2 depth_diff = sample_depth_2 - pair_depths[pair_index];
+            const __half2 safe_count =
+                selector *
+                h2rcp(__hmax2(SMALL_FP16_2, pair_splat_counts[pair_index]));
+            pair_depths[pair_index] =
+                __hfma2(depth_diff, safe_count, pair_depths[pair_index]);
+          }
         }
       }
     }
