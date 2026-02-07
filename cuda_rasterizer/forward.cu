@@ -246,6 +246,7 @@ __global__ void preprocessCUDA(
 
 __global__ void __launch_bounds__(BLOCK_SIZE)
     seedClusterDepthsCUDA(const int width, const int height,
+                          const unsigned int grid_width,
                           const uint32_t* __restrict__ splat_ids,
                           const uint2* __restrict__ splat_id_ranges,
                           const float2* __restrict__ means_2d,
@@ -259,21 +260,20 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   const auto thread_rank = block.thread_rank();
 
   // Gather pixel information.
-  const float2 pixel_coordinate = {
-      static_cast<float>(group_index.x * BLOCK_X + thread_index.x),
-      static_cast<float>(group_index.y * BLOCK_Y + thread_index.y)};
-  const auto pixel_index = static_cast<uint32_t>(pixel_coordinate.y) * width +
-                           static_cast<uint32_t>(pixel_coordinate.x);
+  const uint2 pixel_coordinate = {group_index.x * BLOCK_X + thread_index.x,
+                                  group_index.y * BLOCK_Y + thread_index.y};
+  const float2 pixel_coordinate_float = {
+      static_cast<float>(pixel_coordinate.x),
+      static_cast<float>(pixel_coordinate.y)};
+  const auto pixel_index = pixel_coordinate.y * width + pixel_coordinate.x;
 
   // Compute if this thread is associated with a visible pixel.
   const bool pixel_in_bounds =
-      static_cast<uint32_t>(pixel_coordinate.x) < width &&
-      static_cast<uint32_t>(pixel_coordinate.y) < height;
+      pixel_coordinate.x < width && pixel_coordinate.y < height;
 
   // Load input range for this tile.
   const auto splat_id_range =
-      splat_id_ranges[group_index.y * (width + BLOCK_X - 1) / BLOCK_X +
-                      group_index.x];
+      splat_id_ranges[group_index.y * grid_width + group_index.x];
   int todo = static_cast<int>(splat_id_range.y - splat_id_range.x);
   const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -292,10 +292,10 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   // Iterate over batches until all done or range is complete.
   for (int batch_index = 0; batch_index < rounds;
        ++batch_index, todo -= BLOCK_SIZE) {
+    // Sync threads to prepare for collaborative fetching.
     // Exit if everyone is done seeding (or isn't a seeder).
-    if (__syncthreads_count(!pixel_in_bounds ||
-                            unseeded_cluster_index == NUMBER_OF_CLUSTERS) ==
-        BLOCK_SIZE) {
+    if (__syncthreads_and(!pixel_in_bounds ||
+                          unseeded_cluster_index == NUMBER_OF_CLUSTERS)) {
       break;
     }
 
@@ -325,7 +325,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
         // Resample using conic matrix (cf. "Surface
         // Splatting" by Zwicker et al., 2001)
         const float2 xy = collected_means_2d[sample_index];
-        const float2 d = {xy.x - pixel_coordinate.x, xy.y - pixel_coordinate.y};
+        const float2 d = {xy.x - pixel_coordinate_float.x,
+                          xy.y - pixel_coordinate_float.y};
         const float4 con_o = collected_conic_opacity[sample_index];
         const float power =
             -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
@@ -358,9 +359,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
         unseeded_cluster_index++;
       }
     }
-
-    // Sync on per-thread seeding before next fetch batch.
-    block.sync();
   }
 
   // Seeding is complete, write out to global memory in depth order.
@@ -436,18 +434,22 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
   __half2 pair_greens[NUMBER_OF_CLUSTER_PAIRS] = {};
   __half2 pair_blues[NUMBER_OF_CLUSTER_PAIRS] = {};
 
-  // Pull depth seeds.
-  const auto input_base = pixel_index * NUMBER_OF_CLUSTER_PAIRS;
+  // Setup clustering for rendering pixels.
+  if (pixel_in_bounds) {
+    // Pull in depth seeds.
+    const auto input_base = pixel_index * NUMBER_OF_CLUSTER_PAIRS;
 #pragma unroll
-  for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
-    pair_depths[pair_index] = cluster_depth_seeds[input_base + pair_index];
-  }
+    for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS;
+         ++pair_index) {
+      pair_depths[pair_index] = cluster_depth_seeds[input_base + pair_index];
+    }
 
-  // Initialize cluster transmittance to 1.0.
+    // Initialize cluster transmittance to 1.0.
 #pragma unroll
-  for (int pair_index = 0;  // NOLINT(*-loop-convert)
-       pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
-    pair_transmittances[pair_index] = CUDART_ONE_FP16_2;
+    for (int pair_index = 0;  // NOLINT(*-loop-convert)
+         pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
+      pair_transmittances[pair_index] = CUDART_ONE_FP16_2;
+    }
   }
 
   // Iterate over batches until all done or range is complete.
@@ -650,8 +652,8 @@ void FORWARD::seed_cluster_depths(dim3 grid_size, dim3 block_size,
                                   const float* __restrict__ depths,
                                   __half2* __restrict__ cluster_depth_seeds) {
   seedClusterDepthsCUDA<<<grid_size, block_size>>>(
-      width, height, splat_ids, splat_id_ranges, means_2d, conic_opacities,
-      depths, cluster_depth_seeds);
+      width, height, grid_size.x, splat_ids, splat_id_ranges, means_2d,
+      conic_opacities, depths, cluster_depth_seeds);
 }
 void FORWARD::cluster_render(
     dim3 grid_size, dim3 block_size, const int width, const int height,
