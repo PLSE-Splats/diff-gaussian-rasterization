@@ -613,7 +613,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
 
   // Write to color output (and apply background color).
   const auto number_of_pixels = width * height;
-  out_color[0 * number_of_pixels + pixel_index] = __half2float(
+  out_color[pixel_index] = __half2float(
       __hfma(pixel_transmittance, __float2half(bg_color[0]), pixel_red));
   out_color[1 * number_of_pixels + pixel_index] = __half2float(
       __hfma(pixel_transmittance, __float2half(bg_color[1]), pixel_green));
