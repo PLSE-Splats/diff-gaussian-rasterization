@@ -419,7 +419,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
   __shared__ __half collected_splat_depths[BLOCK_SIZE];
   __shared__ float2 collected_means_2d[BLOCK_SIZE];
   __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-  __shared__ float3 collected_colors[BLOCK_SIZE];
+  __shared__ __half collected_colors[3 * BLOCK_SIZE];
 
   // Clustering helper variables.
   uint32_t contributor = 0;
@@ -464,10 +464,11 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
       collected_means_2d[thread_rank] = means_2d[collected_splat_id];
       collected_conic_opacity[thread_rank] =
           conic_opacities[collected_splat_id];
-      collected_colors[thread_rank] =
-          make_float3(features[3 * collected_splat_id],
-                      features[3 * collected_splat_id + 1],
-                      features[3 * collected_splat_id + 2]);
+      collected_colors[3 * thread_rank] = features[3 * collected_splat_id];
+      collected_colors[3 * thread_rank + 1] =
+          features[3 * collected_splat_id + 1];
+      collected_colors[3 * thread_rank + 2] =
+          features[3 * collected_splat_id + 2];
     }
 
     // Sync on collaborative fetching before per-thread seeding.
@@ -506,11 +507,11 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
 
         // Collect color and broadcast.
         const __half2 sample_r =
-            __float2half2_rn(collected_colors[sample_index].x);
+            __half2half2(collected_colors[3 * sample_index]);
         const __half2 sample_g =
-            __float2half2_rn(collected_colors[sample_index].y);
+            __half2half2(collected_colors[3 * sample_index + 1]);
         const __half2 sample_b =
-            __float2half2_rn(collected_colors[sample_index].z);
+            __half2half2(collected_colors[3 * sample_index + 2]);
 
         // Collect sample depth.
         const __half sample_depth = collected_splat_depths[sample_index];
