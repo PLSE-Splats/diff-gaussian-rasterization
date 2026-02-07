@@ -380,7 +380,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
   }
 }
 
-template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
     const int width, const int height, const unsigned int grid_width,
     const uint32_t* __restrict__ splat_ids,
@@ -417,10 +416,10 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
   const int rounds = (todo + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
   // Allocate storage for batches of collectively fetched data.
-  __shared__ uint32_t collected_splat_ids[BLOCK_SIZE];
   __shared__ __half collected_splat_depths[BLOCK_SIZE];
   __shared__ float2 collected_means_2d[BLOCK_SIZE];
   __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+  __shared__ float3 collected_colors[BLOCK_SIZE];
 
   // Clustering helper variables.
   uint32_t contributor = 0;
@@ -460,12 +459,15 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
     if (splat_id_range.x + progress < splat_id_range.y) {
       const uint32_t collected_splat_id =
           splat_ids[splat_id_range.x + progress];
-      collected_splat_ids[thread_rank] = collected_splat_id;
       collected_splat_depths[thread_rank] =
           __float2half(depths[collected_splat_id]);
       collected_means_2d[thread_rank] = means_2d[collected_splat_id];
       collected_conic_opacity[thread_rank] =
           conic_opacities[collected_splat_id];
+      collected_colors[thread_rank] =
+          make_float3(features[3 * collected_splat_id],
+                      features[3 * collected_splat_id + 1],
+                      features[3 * collected_splat_id + 2]);
     }
 
     // Sync on collaborative fetching before per-thread seeding.
@@ -476,9 +478,6 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
     if (pixel_in_bounds) {
       for (int sample_index = 0; sample_index < min(BLOCK_SIZE, todo);
            ++sample_index) {
-        // Collect sample ID.
-        const uint32_t sample_splat_id = collected_splat_ids[sample_index];
-
         // Keep track of current position in range.
         contributor++;
 
@@ -507,11 +506,11 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
 
         // Collect color and broadcast.
         const __half2 sample_r =
-            __float2half2_rn(features[sample_splat_id * CHANNELS + 0]);
+            __float2half2_rn(collected_colors[sample_index].x);
         const __half2 sample_g =
-            __float2half2_rn(features[sample_splat_id * CHANNELS + 1]);
+            __float2half2_rn(collected_colors[sample_index].y);
         const __half2 sample_b =
-            __float2half2_rn(features[sample_splat_id * CHANNELS + 2]);
+            __float2half2_rn(collected_colors[sample_index].z);
 
         // Collect sample depth.
         const __half sample_depth = collected_splat_depths[sample_index];
@@ -665,7 +664,7 @@ void FORWARD::cluster_render(
     const __half2* __restrict__ cluster_depth_seeds,
     uint32_t* __restrict__ n_contributions, float* __restrict__ inv_depth,
     float* __restrict__ final_transmittance, float* __restrict__ out_color) {
-  clusterRenderCUDA<NUM_CHANNELS><<<grid_size, block_size>>>(
+  clusterRenderCUDA<<<grid_size, block_size>>>(
       width, height, grid_size.x, splat_ids, splat_id_ranges, means_2d,
       conic_opacities, depths, features, bg_color, cluster_depth_seeds,
       n_contributions, inv_depth, final_transmittance, out_color);
