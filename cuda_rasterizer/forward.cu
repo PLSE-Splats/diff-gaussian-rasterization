@@ -419,7 +419,9 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
   __shared__ __half collected_splat_depths[BLOCK_SIZE];
   __shared__ float2 collected_means_2d[BLOCK_SIZE];
   __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-  __shared__ __half collected_colors[3 * BLOCK_SIZE];
+  __shared__ __half collected_red[BLOCK_SIZE];
+  __shared__ __half collected_green[BLOCK_SIZE];
+  __shared__ __half collected_blue[BLOCK_SIZE];
 
   // Clustering helper variables.
   uint32_t contributor = 0;
@@ -459,16 +461,13 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
     if (splat_id_range.x + progress < splat_id_range.y) {
       const uint32_t collected_splat_id =
           splat_ids[splat_id_range.x + progress];
-      collected_splat_depths[thread_rank] =
-          __float2half(depths[collected_splat_id]);
+      collected_splat_depths[thread_rank] = depths[collected_splat_id];
       collected_means_2d[thread_rank] = means_2d[collected_splat_id];
       collected_conic_opacity[thread_rank] =
           conic_opacities[collected_splat_id];
-      collected_colors[3 * thread_rank] = features[3 * collected_splat_id];
-      collected_colors[3 * thread_rank + 1] =
-          features[3 * collected_splat_id + 1];
-      collected_colors[3 * thread_rank + 2] =
-          features[3 * collected_splat_id + 2];
+      collected_red[thread_rank] = features[3 * collected_splat_id];
+      collected_green[thread_rank] = features[3 * collected_splat_id + 1];
+      collected_blue[thread_rank] = features[3 * collected_splat_id + 2];
     }
 
     // Sync on collaborative fetching before per-thread seeding.
@@ -506,12 +505,9 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
         const __half2 sample_alpha = __float2half2_rn(sample_alpha_float);
 
         // Collect color and broadcast.
-        const __half2 sample_r =
-            __half2half2(collected_colors[3 * sample_index]);
-        const __half2 sample_g =
-            __half2half2(collected_colors[3 * sample_index + 1]);
-        const __half2 sample_b =
-            __half2half2(collected_colors[3 * sample_index + 2]);
+        const __half2 sample_r = __half2half2(collected_red[sample_index]);
+        const __half2 sample_g = __half2half2(collected_green[sample_index]);
+        const __half2 sample_b = __half2half2(collected_blue[sample_index]);
 
         // Collect sample depth.
         const __half sample_depth = collected_splat_depths[sample_index];
