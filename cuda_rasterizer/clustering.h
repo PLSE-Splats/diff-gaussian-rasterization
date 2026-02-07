@@ -67,30 +67,24 @@ __device__ __forceinline__ void sort_seeds(__half2* __restrict__ seeds) {
 __device__ __forceinline__ void build_cluster_selector_mask(
     const __half2* __restrict__ cluster_depths, const __half sample_depth,
     __half2* __restrict__ mask) {
-  // Compute distances to each cluster.
+  // Compute distances to each cluster and keep track of min.
   const auto sample_depth_2 = __half2half2(sample_depth);
-  __half2 distances[NUMBER_OF_CLUSTER_PAIRS];
+  __half min_distance = MAX_NORMAL_FP16;
+
 #pragma unroll
   for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
-    distances[pair_index] =
-        __habs2(cluster_depths[pair_index] - sample_depth_2);
-  }
-
-  // Find the min distance.
-  __half min_distance = MAX_NORMAL_FP16;
-#pragma unroll
-  for (int pair_index = 0;  // NOLINT(*-loop-convert)
-       pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
-    min_distance = __hmin(
-        min_distance, __hmin(distances[pair_index].x, distances[pair_index].y));
+    const __half2 delta = __habs2(cluster_depths[pair_index] - sample_depth_2);
+    mask[pair_index] = delta;
+    min_distance = __hmin(min_distance, __hmin(delta.x, delta.y));
   }
 
   // Build a mask where 1 is on the min and 0 everywhere else.
 #pragma unroll
   for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
-    mask[pair_index] =
-        __half2(distances[pair_index].x == min_distance ? ONE_FP16 : ZERO_FP16,
-                distances[pair_index].y == min_distance ? ONE_FP16 : ZERO_FP16);
+    mask[pair_index].x =
+        mask[pair_index].x == min_distance ? ONE_FP16 : ZERO_FP16;
+    mask[pair_index].y =
+        mask[pair_index].y == min_distance ? ONE_FP16 : ZERO_FP16;
   }
 }
 
