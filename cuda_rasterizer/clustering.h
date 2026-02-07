@@ -15,10 +15,12 @@
 #define DEBUG_PIXEL (-1)               // 682741
 
 // Half constants.
-#define CUDART_MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
-#define CUDART_ONE_FP16 __ushort_as_half((unsigned short)0x3C00U)
-#define CUDART_ONE_FP16_2 __half2half2(CUDART_ONE_FP16)
-#define CUDART_ZERO_FP16 __ushort_as_half((unsigned short)0x0000U)
+#define MAX_NORMAL_FP16 __ushort_as_half((unsigned short)0x7BFFU)
+#define ONE_FP16 __ushort_as_half((unsigned short)0x3C00U)
+#define ONE_FP16_2 __half2half2(ONE_FP16)
+#define ZERO_FP16 __ushort_as_half((unsigned short)0x0000U)
+#define SMALL_FP16 __float2half(1.0e-4f)
+#define SMALL_FP16_2 __half2half2(SMALL_FP16)
 
 /**
  * In-place swap sort for depth seeds.
@@ -75,7 +77,7 @@ __device__ __forceinline__ void build_cluster_selector_mask(
   }
 
   // Find the min distance.
-  __half min_distance = CUDART_MAX_NORMAL_FP16;
+  __half min_distance = MAX_NORMAL_FP16;
 #pragma unroll
   for (int pair_index = 0;  // NOLINT(*-loop-convert)
        pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
@@ -87,10 +89,8 @@ __device__ __forceinline__ void build_cluster_selector_mask(
 #pragma unroll
   for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
     mask[pair_index] =
-        __half2(distances[pair_index].x == min_distance ? CUDART_ONE_FP16
-                                                        : CUDART_ZERO_FP16,
-                distances[pair_index].y == min_distance ? CUDART_ONE_FP16
-                                                        : CUDART_ZERO_FP16);
+        __half2(distances[pair_index].x == min_distance ? ONE_FP16 : ZERO_FP16,
+                distances[pair_index].y == min_distance ? ONE_FP16 : ZERO_FP16);
   }
 }
 

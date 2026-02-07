@@ -448,7 +448,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
 #pragma unroll
     for (int pair_index = 0;  // NOLINT(*-loop-convert)
          pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
-      pair_transmittances[pair_index] = CUDART_ONE_FP16_2;
+      pair_transmittances[pair_index] = ONE_FP16_2;
     }
   }
 
@@ -530,7 +530,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
 
           pair_splat_counts[pair_index] += selector;
           pair_alpha_sums[pair_index] += selected_alpha;
-          pair_transmittances[pair_index] *= CUDART_ONE_FP16_2 - selected_alpha;
+          pair_transmittances[pair_index] *= ONE_FP16_2 - selected_alpha;
           pair_reds[pair_index] =
               __hfma2(selected_alpha, sample_r, pair_reds[pair_index]);
           pair_greens[pair_index] =
@@ -542,7 +542,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
           const __half2 depth_diff = sample_depth_2 - pair_depths[pair_index];
           const __half2 safe_count =
               selector *
-              h2rcp(__hmax2(CUDART_ONE_FP16_2, pair_splat_counts[pair_index]));
+              h2rcp(__hmax2(SMALL_FP16_2, pair_splat_counts[pair_index]));
           pair_depths[pair_index] =
               __hfma2(depth_diff, safe_count, pair_depths[pair_index]);
         }
@@ -564,21 +564,21 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
   n_contributions[pixel_index] = contributor;
 
   // Initialize rendering variables.
-  __half pixel_transmittance = CUDART_ONE_FP16;
-  __half pixel_red = CUDART_ZERO_FP16;
-  __half pixel_green = CUDART_ZERO_FP16;
-  __half pixel_blue = CUDART_ZERO_FP16;
-  __half expected_invdepth = CUDART_ZERO_FP16;
+  __half pixel_transmittance = ONE_FP16;
+  __half pixel_red = ZERO_FP16;
+  __half pixel_green = ZERO_FP16;
+  __half pixel_blue = ZERO_FP16;
+  __half expected_invdepth = ZERO_FP16;
 
   // Composite cluster to pixel color.
+#pragma unroll
   for (int pair_index = 0; pair_index < NUMBER_OF_CLUSTER_PAIRS; ++pair_index) {
     // Convert transmittance to alpha.
-    const auto pair_alpha = CUDART_ONE_FP16_2 - pair_transmittances[pair_index];
+    const auto pair_alpha = ONE_FP16_2 - pair_transmittances[pair_index];
 
     // Normalize RGB.
     const auto alpha_sum_reciprocal =
-        h2rcp(__hmax2(CUDART_ONE_FP16_2, pair_alpha_sums[pair_index])) *
-        pair_alpha;
+        h2rcp(__hmax2(SMALL_FP16_2, pair_alpha_sums[pair_index])) * pair_alpha;
     const auto red = pair_reds[pair_index] * alpha_sum_reciprocal;
     const auto green = pair_greens[pair_index] * alpha_sum_reciprocal;
     const auto blue = pair_blues[pair_index] * alpha_sum_reciprocal;
@@ -591,8 +591,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
       expected_invdepth = __hfma(hrcp(pair_depths[pair_index].x) * pair_alpha.x,
                                  pixel_transmittance, expected_invdepth);
     }
-    pixel_transmittance *=
-        CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, pair_alpha.x);
+    pixel_transmittance *= ONE_FP16 - __hmin(ONE_FP16, pair_alpha.x);
 
     pixel_red = __hfma(red.y, pixel_transmittance, pixel_red);
     pixel_green = __hfma(green.y, pixel_transmittance, pixel_green);
@@ -601,8 +600,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
       expected_invdepth = __hfma(hrcp(pair_depths[pair_index].y) * pair_alpha.y,
                                  pixel_transmittance, expected_invdepth);
     }
-    pixel_transmittance *=
-        CUDART_ONE_FP16 - __hmin(CUDART_ONE_FP16, pair_alpha.y);
+    pixel_transmittance *= ONE_FP16 - __hmin(ONE_FP16, pair_alpha.y);
   }
 
   // Write out final inverse depth.
