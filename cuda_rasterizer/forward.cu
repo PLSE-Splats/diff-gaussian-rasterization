@@ -329,8 +329,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE)
                           xy.y - pixel_coordinate_float.y};
         const float4 con_o = collected_conic_opacity[sample_index];
         const float power =
-            -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
-            con_o.y * d.x * d.y;
+            fmaf(-0.5f, fmaf(con_o.x, d.x * d.x, con_o.z * d.y * d.y),
+                 -(con_o.y * d.x * d.y));
         if (power > 0.0f) continue;
 
         // Eq. (2) from 3D Gaussian splatting paper.
@@ -490,8 +490,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE) clusterRenderCUDA(
                           xy.y - pixel_coordinate_float.y};
         const float4 con_o = collected_conic_opacity[sample_index];
         const float power =
-            -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) -
-            con_o.y * d.x * d.y;
+            fmaf(-0.5f, fmaf(con_o.x, d.x * d.x, con_o.z * d.y * d.y),
+                 -(con_o.y * d.x * d.y));
         if (power > 0.0f) continue;
 
         // Eq. (2) from 3D Gaussian splatting paper.
