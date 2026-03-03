@@ -14,6 +14,7 @@
 #include <fstream>
 #include <algorithm>
 #include <numeric>
+#include <vector>
 #include <cuda.h>
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
@@ -174,6 +175,7 @@ CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, s
 	ImageState img;
 	obtain(chunk, img.accum_alpha, N, 128);
 	obtain(chunk, img.n_contrib, N, 128);
+	obtain(chunk, img.actual_n_contrib, N, 128);
 	obtain(chunk, img.ranges, N, 128);
 	return img;
 }
@@ -332,10 +334,50 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.conic_opacity,
 		imgState.accum_alpha,
 		imgState.n_contrib,
+		imgState.actual_n_contrib,
 		background,
 		out_color,
 		geomState.depths,
 		depth), debug)
+
+	// Append per-frame metrics to CSV files in the working directory
+	{
+		const int num_tiles = tile_grid.x * tile_grid.y;
+		const int num_pixels = width * height;
+
+		// num_rendered.csv
+		{
+			std::ofstream f("num_rendered.csv", std::ios::app);
+			f << num_rendered << "\n";
+		}
+
+		// splats_per_tile.csv
+		{
+			std::vector<uint2> h_ranges(num_tiles);
+			cudaMemcpy(h_ranges.data(), imgState.ranges, num_tiles * sizeof(uint2), cudaMemcpyDeviceToHost);
+			std::ofstream f("splats_per_tile.csv", std::ios::app);
+			for (int i = 0; i < num_tiles; i++)
+				f << (h_ranges[i].y - h_ranges[i].x) << "\n";
+		}
+
+		// splats_per_pixel.csv
+		{
+			std::vector<uint32_t> h_n_contrib(num_pixels);
+			cudaMemcpy(h_n_contrib.data(), imgState.n_contrib, num_pixels * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+			std::ofstream f("splats_per_pixel.csv", std::ios::app);
+			for (int i = 0; i < num_pixels; i++)
+				f << h_n_contrib[i] << "\n";
+		}
+
+		// actual_splats_per_pixel.csv
+		{
+			std::vector<uint32_t> h_actual(num_pixels);
+			cudaMemcpy(h_actual.data(), imgState.actual_n_contrib, num_pixels * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+			std::ofstream f("actual_splats_per_pixel.csv", std::ios::app);
+			for (int i = 0; i < num_pixels; i++)
+				f << h_actual[i] << "\n";
+		}
+	}
 
 	return num_rendered;
 }

@@ -59,6 +59,7 @@ namespace FORWARD
 		const float4* conic_opacity,
 		float* final_T,
 		uint32_t* n_contrib,
+		uint32_t* actual_n_contrib,
 		const float* bg_color,
 		float* out_color,
 		float* depths,
